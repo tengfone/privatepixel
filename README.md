@@ -28,6 +28,8 @@ Workers, and narrow WASM-ready processing boundaries.
 - Convert tool with target format and high-quality local browser encoding.
 - Crop tool powered by an interactive cropper with zoom, aspect presets, rotation,
   and output format controls.
+- Remove BG tool with local-only model routing, transparent PNG output, and an
+  Advanced model selector.
 - Centered preview stage with zoom controls for preview, compress, convert, and
   remove-background views.
 - Live output size preview that locally encodes the selected image after option
@@ -86,12 +88,25 @@ important than filling the target box.
 
 ## Background Removal
 
-The remove-background tool is intentionally present but disabled in the current
-runtime path. The worker contract, lazy runtime boundary, local model folder, and
-local vendor asset folder are prepared, but the actual background-removal runtime
-still needs to be wired before the UI enables the tool.
+The remove-background tool runs locally in a Web Worker and exports a transparent
+PNG. Selecting the tool does not load model assets; model and runtime files are
+lazy-loaded only when the user runs Remove BG.
 
-Prepared local asset paths include:
+The default mode is `Auto`. Auto runs the local MediaPipe face detector on a
+downscaled image, then routes the image to:
+
+- MODNet for detected portraits and people-focused images.
+- RMBG-1.4 for general objects, products, animals, logos, and mixed scenes.
+
+The main path keeps model choice out of the way. An Advanced dropdown exposes:
+
+- `Auto`
+- `Portrait (faster/lighter)` using MODNet
+- `General objects` using RMBG-1.4
+- `Best result`, which runs the auto-picked model plus the fallback model and
+  keeps the cleaner non-pathological alpha mask
+
+Bundled local asset paths include:
 
 - `public/models/briaai/RMBG-1.4`
 - `public/models/Xenova/modnet`
@@ -99,9 +114,11 @@ Prepared local asset paths include:
 - `public/vendor/onnxruntime-web`
 - `public/vendor/mediapipe/tasks-vision`
 
-When background removal is enabled, model and runtime assets should load from these
-local static paths and remain outside the initial app bundle. The app should not
-call a remote image-processing or inference API as a fallback.
+Transformers.js is configured for local-only model loading. RMBG-1.4 attempts
+WebGPU first when available and falls back to WASM; MODNet currently uses WASM.
+Remove BG batch processing is limited to one job at a time to avoid duplicate
+large model loads and memory spikes. The app does not call a remote
+image-processing or inference API as a fallback.
 
 ## Stack
 
@@ -114,10 +131,10 @@ call a remote image-processing or inference API as a fallback.
   object URLs, file input, and drag/drop
 - `pica` for high-quality local resizing paths
 - `react-easy-crop` for the interactive crop UI
-- `@huggingface/transformers` and local ONNX Runtime assets prepared for future
-  local background removal
-- `@mediapipe/tasks-vision` and local MediaPipe assets prepared for future local
-  model utilities
+- `@huggingface/transformers` with local ONNX Runtime assets for browser
+  background-removal inference
+- `@mediapipe/tasks-vision` with local MediaPipe assets for face-detection
+  routing
 - Rust/WASM scaffold for future hot paths
 - Vitest for unit tests
 - Playwright for browser flow tests
@@ -191,8 +208,9 @@ pnpm run wasm:test
 ## Testing
 
 Unit tests cover image option logic such as resize dimension calculation, crop
-normalization, rotation helpers, MIME/extension mapping, quality clamping, and
-resize presets.
+normalization, rotation helpers, MIME/extension mapping, quality clamping, resize
+presets, Remove BG defaults, model routing, alpha-mask composition, and mocked
+worker PNG output.
 
 Playwright tests cover the browser workflow under the GitHub Pages-style base path:
 importing an image, verifying the live output size preview, applying a resize
@@ -243,9 +261,10 @@ PrivatePixel is built so basic image editing stays local:
 - Files are read through browser file APIs.
 - Previews use object URLs.
 - Image processing runs in the browser and Web Worker.
+- Background removal loads bundled local model assets only when the tool runs.
 - Results are returned as local blobs.
 - Downloads are initiated from the browser session.
-- The current background-removal path does not fall back to remote inference.
+- Background removal does not fall back to remote inference.
 
 Avoid adding telemetry, hosted model URLs, upload endpoints, or server-side image
 processing unless the product promise is intentionally changed.
