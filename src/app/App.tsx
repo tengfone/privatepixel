@@ -72,11 +72,11 @@ const TOOL_LABELS: Record<ImageTool, string> = {
 };
 
 const TOOL_COPY: Record<ImageTool, string> = {
-  resize: "Drag the frame or set exact output dimensions.",
+  resize: "Drag the frame, zoom the canvas, or set exact output dimensions.",
   compress: "Set format, quality, and maximum edge length.",
   convert: "Choose a target image format.",
   crop: "Drag, zoom, and export the selected area.",
-  "remove-background": "Local cutout model is not bundled yet.",
+  "remove-background": "Offline background removal needs a local model bundle.",
 };
 
 const CROP_ASPECTS: Record<Exclude<CropAspect, "original">, number> = {
@@ -139,6 +139,21 @@ function clampPercent(value: number): number {
   return Math.min(100, Math.max(5, value));
 }
 
+function clampValue(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function clampFramePosition(
+  position: Point,
+  frameWidth: number,
+  frameHeight: number,
+): Point {
+  return {
+    x: clampValue(position.x, 0, Math.max(0, 100 - frameWidth)),
+    y: clampValue(position.y, 0, Math.max(0, 100 - frameHeight)),
+  };
+}
+
 export function App() {
   const [assets, setAssets] = useState<ImageAsset[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
@@ -156,6 +171,7 @@ export function App() {
   const [cropPercent, setCropPercent] = useState(createCropPercentOptions);
   const [cropPosition, setCropPosition] = useState<Point>({ x: 0, y: 0 });
   const [cropZoom, setCropZoom] = useState(1);
+  const [resizeViewZoom, setResizeViewZoom] = useState(1);
   const [concurrency, setConcurrency] = useState(2);
   const [notice, setNotice] = useState("Images stay in this browser session.");
   const [isDragging, setIsDragging] = useState(false);
@@ -515,6 +531,22 @@ export function App() {
 
   return (
     <main className="app-shell">
+      <header className="site-header" aria-label="Primary navigation">
+        <a className="site-mark" href="#app">
+          PrivatePixel
+        </a>
+        <nav className="site-nav" aria-label="Sections">
+          <a className="active" href="#app">
+            App
+          </a>
+          <a href="#about">About</a>
+        </nav>
+        <div className="site-status" aria-live="polite">
+          <span>Existing selection</span>
+          <strong>{selectedAsset ? selectedAsset.name : "No image selected"}</strong>
+        </div>
+      </header>
+
       <header className="masthead swiss-grid-pattern">
         <div className="masthead-index">
           <span>01</span>
@@ -525,6 +557,7 @@ export function App() {
       </header>
 
       <section
+        id="app"
         className={`dropzone swiss-dots${isDragging ? " dropzone-active" : ""}`}
         onDragOver={(event) => {
           event.preventDefault();
@@ -582,11 +615,12 @@ export function App() {
               asset={selectedAsset}
               job={getJobView(jobs, selectedAsset.id)}
               resizeOptions={resizeOptions}
+              resizeViewZoom={resizeViewZoom}
               cropAspect={cropAspect}
-              cropPercent={cropPercent}
               cropPosition={cropPosition}
               cropZoom={cropZoom}
               onResizeChange={setResizeOptions}
+              onResizeViewZoomChange={setResizeViewZoom}
               onCropPositionChange={setCropPosition}
               onCropZoomChange={setCropZoom}
               onCropAreaChange={(area) =>
@@ -619,7 +653,9 @@ export function App() {
             <ResizeControls
               asset={selectedAsset}
               options={resizeOptions}
+              viewZoom={resizeViewZoom}
               onChange={setResizeOptions}
+              onViewZoomChange={setResizeViewZoom}
             />
           ) : null}
 
@@ -644,11 +680,11 @@ export function App() {
 
           {activeTool === "remove-background" ? (
             <div className="runtime-note">
-              <p className="eyebrow">Model required</p>
-              <h3>Offline cutout is paused.</h3>
+              <p className="eyebrow">Not installed</p>
+              <h3>Local cutout model pending.</h3>
               <p>
-                Ship a local model bundle under static assets, then enable this worker
-                path without remote inference.
+                This tool is disabled until a bundled browser model is added. There is
+                no upload fallback.
               </p>
             </div>
           ) : null}
@@ -736,6 +772,22 @@ export function App() {
           </div>
         )}
       </section>
+
+      <section
+        id="about"
+        className="about-panel swiss-diagonal"
+        aria-labelledby="about-title"
+      >
+        <div>
+          <p className="eyebrow">07. About</p>
+          <h2 id="about-title">Private image work, kept local.</h2>
+        </div>
+        <p>
+          Resize, compress, convert, crop, and export images in this browser. Source
+          files stay in memory on this device; no server processing, accounts, paywalls,
+          or watermarks.
+        </p>
+      </section>
     </main>
   );
 }
@@ -745,11 +797,12 @@ interface EditorStageProps {
   asset: ImageAsset;
   job: AssetJobView;
   resizeOptions: ResizeOptions;
+  resizeViewZoom: number;
   cropAspect: CropAspect;
-  cropPercent: CropPercentOptions;
   cropPosition: Point;
   cropZoom: number;
   onResizeChange: (options: ResizeOptions) => void;
+  onResizeViewZoomChange: (zoom: number) => void;
   onCropPositionChange: (position: Point) => void;
   onCropZoomChange: (zoom: number) => void;
   onCropAreaChange: (area: Area) => void;
@@ -760,10 +813,12 @@ function EditorStage({
   asset,
   job,
   resizeOptions,
+  resizeViewZoom,
   cropAspect,
   cropPosition,
   cropZoom,
   onResizeChange,
+  onResizeViewZoomChange,
   onCropPositionChange,
   onCropZoomChange,
   onCropAreaChange,
@@ -797,8 +852,10 @@ function EditorStage({
       <ResizeStage
         asset={asset}
         options={resizeOptions}
+        viewZoom={resizeViewZoom}
         result={result}
         onChange={onResizeChange}
+        onViewZoomChange={onResizeViewZoomChange}
       />
     );
   }
@@ -821,11 +878,21 @@ function EditorStage({
 interface ResizeStageProps {
   asset: ImageAsset;
   options: ResizeOptions;
+  viewZoom: number;
   result?: ProcessedImageResult;
   onChange: (options: ResizeOptions) => void;
+  onViewZoomChange: (zoom: number) => void;
 }
 
-function ResizeStage({ asset, options, result, onChange }: ResizeStageProps) {
+function ResizeStage({
+  asset,
+  options,
+  viewZoom,
+  result,
+  onChange,
+  onViewZoomChange,
+}: ResizeStageProps) {
+  const [framePosition, setFramePosition] = useState<Point>({ x: 0, y: 0 });
   const output = calculateResizeDimensions({
     sourceWidth: asset.width,
     sourceHeight: asset.height,
@@ -836,6 +903,11 @@ function ResizeStage({ asset, options, result, onChange }: ResizeStageProps) {
   });
   const frameWidth = clampPercent((output.width / asset.width) * 100);
   const frameHeight = clampPercent((output.height / asset.height) * 100);
+  const boundedFramePosition = clampFramePosition(
+    framePosition,
+    frameWidth,
+    frameHeight,
+  );
 
   function updateFromPointer(
     event: PointerEvent<HTMLButtonElement> | globalThis.PointerEvent,
@@ -882,12 +954,13 @@ function ResizeStage({ asset, options, result, onChange }: ResizeStageProps) {
 
   function startDrag(handle: ResizeHandle) {
     return (event: PointerEvent<HTMLButtonElement>): void => {
-      const stage = event.currentTarget.closest(".resize-stage");
-      const rect = stage?.getBoundingClientRect();
+      const canvas = event.currentTarget.closest(".resize-canvas");
+      const rect = canvas?.getBoundingClientRect();
       if (!rect) {
         return;
       }
 
+      event.stopPropagation();
       event.currentTarget.setPointerCapture(event.pointerId);
       updateFromPointer(event, handle, rect);
 
@@ -904,32 +977,101 @@ function ResizeStage({ asset, options, result, onChange }: ResizeStageProps) {
     };
   }
 
+  function startFrameDrag(event: PointerEvent<HTMLDivElement>): void {
+    if (event.target instanceof HTMLButtonElement) {
+      return;
+    }
+
+    const rect = event.currentTarget.parentElement?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const initial = boundedFramePosition;
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    const handleMove = (moveEvent: globalThis.PointerEvent): void => {
+      const deltaX = ((moveEvent.clientX - startX) / rect.width) * 100;
+      const deltaY = ((moveEvent.clientY - startY) / rect.height) * 100;
+      setFramePosition(
+        clampFramePosition(
+          {
+            x: initial.x + deltaX,
+            y: initial.y + deltaY,
+          },
+          frameWidth,
+          frameHeight,
+        ),
+      );
+    };
+    const stop = (): void => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", stop);
+    };
+
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", stop);
+  }
+
+  function changeViewZoom(nextZoom: number): void {
+    onViewZoomChange(clampValue(nextZoom, 0.5, 3));
+  }
+
   return (
-    <div className="editor-stage resize-stage swiss-grid-pattern">
-      <img src={asset.previewUrl} alt={`Selected ${asset.name}`} />
+    <div
+      className="editor-stage resize-stage swiss-grid-pattern"
+      onWheel={(event) => {
+        event.preventDefault();
+        changeViewZoom(viewZoom + (event.deltaY > 0 ? -0.1 : 0.1));
+      }}
+    >
+      <div className="resize-zoom-tools" aria-label="Resize canvas zoom controls">
+        <button type="button" onClick={() => changeViewZoom(viewZoom - 0.25)}>
+          -
+        </button>
+        <span>{Math.round(viewZoom * 100)}%</span>
+        <button type="button" onClick={() => changeViewZoom(viewZoom + 0.25)}>
+          +
+        </button>
+      </div>
       <div
-        className="resize-frame"
-        style={{ width: `${frameWidth}%`, height: `${frameHeight}%` }}
+        className="resize-canvas"
+        style={{ transform: `translate(-50%, -50%) scale(${viewZoom})` }}
       >
-        <span>{formatDimensions(output.width, output.height)}</span>
-        <button
-          type="button"
-          className="resize-handle resize-handle-x"
-          aria-label="Drag width"
-          onPointerDown={startDrag("width")}
-        />
-        <button
-          type="button"
-          className="resize-handle resize-handle-y"
-          aria-label="Drag height"
-          onPointerDown={startDrag("height")}
-        />
-        <button
-          type="button"
-          className="resize-handle resize-handle-corner"
-          aria-label="Drag width and height"
-          onPointerDown={startDrag("both")}
-        />
+        <img src={asset.previewUrl} alt={`Selected ${asset.name}`} />
+        <div
+          className="resize-frame"
+          style={{
+            left: `${boundedFramePosition.x}%`,
+            top: `${boundedFramePosition.y}%`,
+            width: `${frameWidth}%`,
+            height: `${frameHeight}%`,
+          }}
+          onPointerDown={startFrameDrag}
+        >
+          <span>{formatDimensions(output.width, output.height)}</span>
+          <button
+            type="button"
+            className="resize-handle resize-handle-x"
+            aria-label="Drag width"
+            onPointerDown={startDrag("width")}
+          />
+          <button
+            type="button"
+            className="resize-handle resize-handle-y"
+            aria-label="Drag height"
+            onPointerDown={startDrag("height")}
+          />
+          <button
+            type="button"
+            className="resize-handle resize-handle-corner"
+            aria-label="Drag width and height"
+            onPointerDown={startDrag("both")}
+          />
+        </div>
       </div>
       <StageMeta asset={asset} result={result} />
     </div>
@@ -955,10 +1097,18 @@ function StageMeta({ asset, result }: StageMetaProps) {
 interface ResizeControlsProps {
   asset?: ImageAsset;
   options: ResizeOptions;
+  viewZoom: number;
   onChange: (options: ResizeOptions) => void;
+  onViewZoomChange: (zoom: number) => void;
 }
 
-function ResizeControls({ asset, options, onChange }: ResizeControlsProps) {
+function ResizeControls({
+  asset,
+  options,
+  viewZoom,
+  onChange,
+  onViewZoomChange,
+}: ResizeControlsProps) {
   return (
     <div className="control-stack">
       <NumberField
@@ -996,6 +1146,13 @@ function ResizeControls({ asset, options, onChange }: ResizeControlsProps) {
       <QualityField
         value={options.quality}
         onChange={(quality) => onChange({ ...options, quality })}
+      />
+      <QualityField
+        value={viewZoom}
+        label="View zoom"
+        min={0.5}
+        max={3}
+        onChange={onViewZoomChange}
       />
       <label className="checkbox-field">
         <input

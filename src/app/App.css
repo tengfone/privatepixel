@@ -157,17 +157,102 @@ img {
   padding: 1rem;
 }
 
+.site-header {
+  display: grid;
+  grid-template-columns: minmax(11rem, 1.1fr) auto minmax(13rem, 1.6fr);
+  min-height: 4.25rem;
+  border: 4px solid var(--color-border);
+  border-bottom: 0;
+  background: var(--color-bg);
+}
+
+.site-mark,
+.site-nav a,
+.site-status {
+  min-width: 0;
+  padding: 0.85rem 1rem;
+  color: var(--color-fg);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.site-mark {
+  display: flex;
+  align-items: center;
+  border-right: 4px solid var(--color-border);
+}
+
+.site-nav {
+  display: flex;
+  min-width: 0;
+}
+
+.site-nav a {
+  display: flex;
+  align-items: center;
+  min-height: 100%;
+  border-right: 4px solid var(--color-border);
+  transition:
+    background-color 150ms linear,
+    color 150ms linear;
+}
+
+.site-nav a.active {
+  background: var(--color-fg);
+  color: var(--color-bg);
+}
+
+.site-mark:hover,
+.site-nav a:hover {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.site-mark:focus-visible,
+.site-nav a:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: -6px;
+}
+
+.site-status {
+  display: grid;
+  align-content: center;
+  justify-items: end;
+  gap: 0.2rem;
+}
+
+.site-status span,
+.site-status strong {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.site-status span {
+  color: var(--color-accent);
+  font-size: 0.68rem;
+}
+
+.site-status strong {
+  font-size: 0.78rem;
+}
+
 .masthead {
   display: grid;
-  grid-template-columns: minmax(7rem, 1fr) minmax(0, 7fr) minmax(13rem, 2fr);
-  min-height: 14rem;
+  grid-template-columns: minmax(6rem, 0.8fr) minmax(0, 5fr) minmax(12rem, 2fr);
+  min-height: 8rem;
   border: 4px solid var(--color-border);
   border-bottom: 0;
   background-color: var(--color-bg);
 }
 
 .masthead > * {
-  padding: 1rem;
+  padding: 0.8rem 1rem;
 }
 
 .masthead-index {
@@ -183,12 +268,12 @@ img {
 
 .masthead h1 {
   align-self: end;
-  max-width: 12ch;
+  max-width: 18ch;
   margin: 0;
-  font-size: 8.5rem;
+  font-size: 4.75rem;
   font-weight: 900;
   letter-spacing: 0;
-  line-height: 0.82;
+  line-height: 0.88;
   text-transform: uppercase;
   overflow-wrap: anywhere;
 }
@@ -197,9 +282,9 @@ img {
   align-self: end;
   margin: 0;
   border-left: 4px solid var(--color-border);
-  font-size: 1.7rem;
+  font-size: 1.05rem;
   font-weight: 900;
-  line-height: 1.02;
+  line-height: 1.1;
   text-transform: uppercase;
 }
 
@@ -412,7 +497,7 @@ img {
 }
 
 .preview-stage img,
-.resize-stage > img {
+.resize-canvas > img {
   display: block;
   width: 100%;
   height: 100%;
@@ -425,21 +510,59 @@ img {
   padding: 2rem;
 }
 
-.resize-stage > img {
+.resize-canvas {
   position: absolute;
-  inset: 2rem;
+  left: 50%;
+  top: 50%;
   width: calc(100% - 4rem);
   height: calc(100% - 4rem);
+  transform-origin: center;
+  transition: transform 150ms linear;
+}
+
+.resize-canvas > img {
+  position: absolute;
+  inset: 0;
+}
+
+.resize-zoom-tools {
+  position: absolute;
+  right: 1rem;
+  top: 1rem;
+  z-index: 4;
+  display: grid;
+  grid-template-columns: 2.5rem 4.5rem 2.5rem;
+  border: 4px solid var(--color-border);
+  background: var(--color-bg);
+}
+
+.resize-zoom-tools button {
+  min-height: 2.5rem;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+
+.resize-zoom-tools button + span,
+.resize-zoom-tools span + button {
+  border-left: 4px solid var(--color-border);
+}
+
+.resize-zoom-tools span {
+  display: grid;
+  place-items: center;
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 .resize-frame {
   position: absolute;
-  left: 2rem;
-  top: 2rem;
   min-width: 4rem;
   min-height: 4rem;
   border: 4px solid var(--color-accent);
   background: rgba(255, 48, 0, 0.08);
+  cursor: move;
   mix-blend-mode: normal;
 }
 
@@ -567,8 +690,8 @@ img {
 .runtime-note {
   display: grid;
   gap: 0.75rem;
-  border: 4px solid var(--color-accent);
-  background: #fff1ed;
+  border: 4px solid var(--color-border);
+  background: var(--color-muted);
   padding: 1rem;
 }
 
@@ -601,8 +724,37 @@ img {
 
 .manifest-panel {
   border: 4px solid var(--color-border);
+  border-bottom: 0;
   background: var(--color-bg);
   padding: 1rem;
+}
+
+.about-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(18rem, 0.8fr);
+  gap: 1rem;
+  align-items: end;
+  border: 4px solid var(--color-border);
+  background-color: var(--color-muted);
+  padding: 1rem;
+}
+
+.about-panel h2 {
+  max-width: 14ch;
+  margin: 0;
+  font-size: 3.2rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 0.9;
+  text-transform: uppercase;
+}
+
+.about-panel p:last-child {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1.25;
+  text-transform: uppercase;
 }
 
 .queue-actions {
@@ -800,14 +952,18 @@ progress::-moz-progress-bar {
 }
 
 @media (max-width: 1180px) {
+  .site-header,
   .masthead,
   .dropzone,
   .workbench,
   .section-heading,
+  .about-panel,
   .asset-item {
     grid-template-columns: 1fr;
   }
 
+  .site-mark,
+  .site-nav a,
   .masthead-index,
   .masthead p,
   .dropzone > div,
@@ -821,6 +977,9 @@ progress::-moz-progress-bar {
     border-right: 0;
   }
 
+  .site-mark,
+  .site-nav,
+  .site-status,
   .masthead-index,
   .dropzone > div,
   .tool-rail,
@@ -832,18 +991,27 @@ progress::-moz-progress-bar {
     border-bottom: 4px solid var(--color-border);
   }
 
+  .site-nav a:last-child {
+    border-right: 0;
+  }
+
+  .site-status {
+    justify-items: start;
+  }
+
   .masthead p {
     border-left: 0;
     border-top: 4px solid var(--color-border);
   }
 
   .masthead h1 {
-    font-size: 6rem;
-    line-height: 0.88;
+    font-size: 4.1rem;
+    line-height: 0.9;
   }
 
   .dropzone h2,
   .section-heading h2,
+  .about-panel h2,
   .manifest-panel h2,
   .empty-state h3 {
     font-size: 2.7rem;
@@ -871,13 +1039,32 @@ progress::-moz-progress-bar {
     padding: 0.5rem;
   }
 
+  .site-header {
+    min-height: 0;
+  }
+
+  .site-nav {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .site-nav a {
+    justify-content: center;
+    min-height: 3.5rem;
+  }
+
+  .site-nav a:first-child {
+    border-right: 4px solid var(--color-border);
+  }
+
   .masthead h1 {
-    font-size: 3.3rem;
+    font-size: 2.65rem;
     line-height: 0.9;
   }
 
   .dropzone h2,
   .section-heading h2,
+  .about-panel h2,
   .manifest-panel h2,
   .empty-state h3 {
     font-size: 2rem;
@@ -891,7 +1078,8 @@ progress::-moz-progress-bar {
   .tool-rail,
   .stage-panel,
   .control-panel,
-  .manifest-panel {
+  .manifest-panel,
+  .about-panel {
     padding: 0.75rem;
   }
 

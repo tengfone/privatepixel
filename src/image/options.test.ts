@@ -57,6 +57,8 @@ describe("image option helpers", () => {
     expect(mimeToExtension("image/png")).toBe("png");
     expect(mimeToExtension("image/jpeg")).toBe("jpg");
     expect(mimeToExtension("image/webp")).toBe("webp");
+    expect(mimeToExtension("image/avif")).toBe("avif");
+    expect(mimeToExtension("image/svg+xml")).toBe("svg");
   });
 
   it("clamps invalid quality values", () => {

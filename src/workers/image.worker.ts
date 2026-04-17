@@ -131,6 +131,10 @@ async function encodeCanvas(
   mimeType: OutputMimeType,
   quality: number,
 ): Promise<Blob> {
+  if (mimeType === "image/svg+xml") {
+    return encodeCanvasAsSvg(canvas);
+  }
+
   const blob = await canvas.convertToBlob({
     type: mimeType,
     quality: clampQuality(quality),
@@ -140,7 +144,36 @@ async function encodeCanvas(
     throw new Error("Browser image encoder returned an empty file.");
   }
 
+  if (blob.type && blob.type !== mimeType) {
+    throw new Error(`${mimeType} export is not supported by this browser.`);
+  }
+
   return blob;
+}
+
+async function encodeCanvasAsSvg(canvas: OffscreenCanvas): Promise<Blob> {
+  const png = await canvas.convertToBlob({ type: "image/png" });
+  const base64 = arrayBufferToBase64(await png.arrayBuffer());
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}" viewBox="0 0 ${canvas.width} ${canvas.height}">`,
+    `<image width="${canvas.width}" height="${canvas.height}" href="data:image/png;base64,${base64}" />`,
+    "</svg>",
+  ].join("");
+
+  return new Blob([svg], { type: "image/svg+xml" });
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 8192;
+  let binary = "";
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return btoa(binary);
 }
 
 async function processResize(

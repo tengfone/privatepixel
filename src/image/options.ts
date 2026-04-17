@@ -12,12 +12,16 @@ const MIME_EXTENSIONS: Record<OutputMimeType, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
   "image/webp": "webp",
+  "image/avif": "avif",
+  "image/svg+xml": "svg",
 };
 
 const MIME_LABELS: Record<OutputMimeType, string> = {
   "image/png": "PNG",
   "image/jpeg": "JPEG",
   "image/webp": "WebP",
+  "image/avif": "AVIF",
+  "image/svg+xml": "SVG wrapper",
 };
 
 export const SUPPORTED_INPUT_MIME_TYPES = new Set([

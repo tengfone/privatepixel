@@ -5,7 +5,12 @@ export type ImageTool =
   | "crop"
   | "remove-background";
 
-export type OutputMimeType = "image/png" | "image/jpeg" | "image/webp";
+export type OutputMimeType =
+  | "image/png"
+  | "image/jpeg"
+  | "image/webp"
+  | "image/avif"
+  | "image/svg+xml";
 
 export type ResizeFitMode = "contain" | "cover" | "stretch";
 
