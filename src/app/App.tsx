@@ -761,6 +761,7 @@ export function App() {
     <main className="app-shell">
       <header className="site-header" aria-label="Primary navigation">
         <a className="site-mark" href="#app">
+          <img src="/assets/private_pixel.png" alt="PrivatePixel" height={28} />
           PrivatePixel
         </a>
         <nav className="site-nav" aria-label="Sections">

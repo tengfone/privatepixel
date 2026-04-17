@@ -1,5 +1,9 @@
 # PrivatePixel
 
+<p align="center">
+  <img src="public/assets/private_pixel.png" alt="PrivatePixel Logo" width="200" />
+</p>
+
 PrivatePixel is a browser-based image utility suite for local image editing. It
 lets users resize, compress, convert, crop, preview output size, and export images
 entirely on their own device.
