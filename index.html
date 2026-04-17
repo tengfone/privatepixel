@@ -3,14 +3,104 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="index, follow" />
+    <meta name="author" content="tengfone" />
+    <meta name="application-name" content="PrivatePixel" />
+    <meta name="theme-color" content="#ff3000" />
     <meta
       name="description"
-      content="Resize, compress, convert, crop, and export images locally in your browser."
+      content="Resize, compress, convert, crop, remove backgrounds, and edit image metadata locally in your browser. No uploads, accounts, watermarks, or server processing."
     />
-    <link rel="icon" type="image/x-icon" href="./assets/private_pixel.ico" />
-    <title>PrivatePixel</title>
+    <link rel="canonical" href="https://tengfone.github.io/privatepixel/" />
+    <link
+      rel="sitemap"
+      type="application/xml"
+      href="https://tengfone.github.io/privatepixel/sitemap.xml"
+    />
+    <link rel="icon" type="image/x-icon" href="%BASE_URL%assets/private_pixel.ico" />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="1024x1024"
+      href="%BASE_URL%assets/private_pixel.png"
+    />
+    <link rel="apple-touch-icon" href="%BASE_URL%assets/private_pixel.png" />
+    <link rel="manifest" href="%BASE_URL%manifest.webmanifest" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="PrivatePixel" />
+    <meta property="og:title" content="PrivatePixel - Local Image Editor and Resizer" />
+    <meta
+      property="og:description"
+      content="Browser-only image resizing, compression, conversion, cropping, background removal, object cutouts, and metadata editing."
+    />
+    <meta property="og:url" content="https://tengfone.github.io/privatepixel/" />
+    <meta
+      property="og:image"
+      content="https://tengfone.github.io/privatepixel/assets/privatepixel-workspace.png"
+    />
+    <meta property="og:image:width" content="1440" />
+    <meta property="og:image:height" content="1100" />
+    <meta property="og:image:alt" content="PrivatePixel local image editor workspace" />
+    <meta property="og:locale" content="en_US" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="PrivatePixel - Local Image Editor and Resizer"
+    />
+    <meta
+      name="twitter:description"
+      content="Resize, compress, convert, crop, remove backgrounds, and edit image metadata locally in your browser."
+    />
+    <meta
+      name="twitter:image"
+      content="https://tengfone.github.io/privatepixel/assets/privatepixel-workspace.png"
+    />
+    <meta
+      name="twitter:image:alt"
+      content="PrivatePixel local image editor workspace"
+    />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "PrivatePixel",
+        "url": "https://tengfone.github.io/privatepixel/",
+        "description": "PrivatePixel is a local browser image editor for resizing, compressing, converting, cropping, removing backgrounds, cutting out objects, and editing image metadata without uploads.",
+        "applicationCategory": "MultimediaApplication",
+        "operatingSystem": "Any",
+        "isAccessibleForFree": true,
+        "image": "https://tengfone.github.io/privatepixel/assets/privatepixel-workspace.png",
+        "sameAs": "https://github.com/tengfone/privatepixel",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "featureList": [
+          "Local image resizing",
+          "Local image compression",
+          "Image format conversion",
+          "Image cropping",
+          "Background removal",
+          "Object cutouts",
+          "Image metadata inspection and editing",
+          "Batch image export"
+        ]
+      }
+    </script>
+    <title>PrivatePixel - Local Image Editor and Resizer</title>
   </head>
   <body>
+    <noscript>
+      <main>
+        <h1>PrivatePixel local image editor</h1>
+        <p>
+          Resize, compress, convert, crop, remove backgrounds, cut out objects, inspect
+          metadata, and export images locally in your browser. Source files stay on this
+          device with no uploads, accounts, watermarks, or server-side image processing.
+        </p>
+      </main>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

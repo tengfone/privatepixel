@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /privatepixel/
+
+Sitemap: https://tengfone.github.io/privatepixel/sitemap.xml

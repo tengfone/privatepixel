@@ -1188,8 +1188,8 @@ export function App() {
           <span>01</span>
           <span>PrivatePixel</span>
         </div>
-        <h1>Local image workshop</h1>
-        <p>No uploads. No account. No watermark.</p>
+        <h1>Local image editor</h1>
+        <p>Resize, compress, convert, crop, remove backgrounds.</p>
       </header>
 
       <section

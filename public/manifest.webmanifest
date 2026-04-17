@@ -1,0 +1,18 @@
+{
+  "name": "PrivatePixel",
+  "short_name": "PrivatePixel",
+  "description": "Resize, compress, convert, crop, remove backgrounds, and edit image metadata locally in your browser.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ff3000",
+  "icons": [
+    {
+      "src": "assets/private_pixel.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
