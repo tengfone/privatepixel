@@ -43,6 +43,8 @@ export interface ResizeOptions {
   height: number;
   lockAspectRatio: boolean;
   fitMode: ResizeFitMode;
+  cropAnchorX: number;
+  cropAnchorY: number;
   mimeType: OutputMimeType;
   quality: number;
 }

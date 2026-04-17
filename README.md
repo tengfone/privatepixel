@@ -43,7 +43,8 @@
 </p>
 
 PrivatePixel is a browser-based image utility suite for local image editing. It
-lets users resize, compress, convert, crop, preview output size, and export images
+lets users resize, compress, convert, crop, inspect and edit metadata, remove
+backgrounds, cut out clicked objects, preview output size, and export images
 entirely on their own device.
 
 The product promise is simple:
@@ -65,19 +66,20 @@ Workers, and narrow WASM-ready processing boundaries.
 - Local queue with file name, dimensions, MIME type, byte size, preview, progress,
   and output results.
 - Resize tool with exact width and height fields, aspect-ratio lock, fit modes,
-  interactive resize frame handles, canvas zoom, and common publishing presets.
+  interactive resize frame handles, canvas zoom, and scrollable common publishing
+  presets.
 - Compress tool with target format, image-quality control, and local size preview.
 - Convert tool with target format and high-quality local browser encoding.
 - Crop tool powered by an interactive cropper with zoom, aspect presets, rotation,
   and output format controls.
-- Metadata tool with format-aware inspect, clean, and edit behavior for image
-  containers that can be safely rewritten locally.
+- Metadata tool that shows existing metadata, separates editable text fields from
+  read-only binary/container fields, and rewrites supported containers locally.
 - Object Select tool that lets the user click one object, preview the local mask,
   and cut the selected object out as a transparent PNG.
 - Remove BG tool with local-only model routing, transparent PNG output, and an
   Advanced model selector.
-- Centered preview stage with zoom controls for preview, compress, convert, and
-  object-selection and remove-background views.
+- Centered preview stage with pan and zoom controls for preview, compress,
+  convert, object-selection, and remove-background views.
 - Live output size preview that locally encodes the selected image after option
   changes and shows output bytes, percentage change, dimensions, format, and encode
   time.
@@ -95,6 +97,9 @@ Input formats:
 - GIF
 - BMP
 - AVIF
+
+HEIC/HEIF is not supported yet. Apple HEIC files and Live Photo still-image assets
+need browser-safe decoding before they can enter the local pipeline.
 
 Output formats:
 
@@ -114,15 +119,19 @@ format, PrivatePixel reports that failure instead of sending the image elsewhere
 ## Metadata
 
 The Metadata method is format-aware instead of pretending every image container has
-the same metadata model.
+the same metadata model. The UI reads the selected file, groups every metadata
+field it can inspect, and marks each entry as editable or read-only.
 
-- JPEG: clean EXIF/GPS/XMP/IPTC/comment metadata, preserve or strip ICC profiles,
-  and write basic public text metadata as a JPEG comment.
-- PNG: clean text chunks and EXIF chunks, preserve or strip color chunks, and write
-  public text fields as PNG `tEXt` chunks.
-- WebP: clean EXIF/XMP/ICC chunks. Public text editing is not enabled for WebP yet.
-- SVG: edit `<title>` and `<desc>`, replace simple public metadata, remove comments,
-  and sanitize scripts, event handlers, and external references.
+- JPEG: inspect EXIF fields, XMP, IPTC/Photoshop blocks, ICC profiles, and
+  comments; clean EXIF/GPS/XMP/IPTC/comment metadata; preserve or strip ICC
+  profiles; and write public text metadata as a JPEG comment.
+- PNG: inspect text chunks, EXIF chunks, density chunks, and color chunks; clean
+  text chunks and EXIF chunks; preserve or strip color chunks; and write editable
+  public fields plus custom text fields as PNG `tEXt` chunks.
+- WebP: inspect and clean EXIF/XMP/ICC chunks. Public text editing is not enabled
+  for WebP yet.
+- SVG: inspect and edit `<title>`, `<desc>`, `<metadata>`, and comments; remove
+  comments; and sanitize scripts, event handlers, and unsafe external references.
 - AVIF/GIF/BMP: inspect-only or basic file info until reliable local writers are
   added.
 
@@ -149,8 +158,17 @@ spot to refine the selection before creating the final PNG.
 The resize tool includes common target sizes:
 
 - Slack profile: `1024 x 1024`
-- YouTube thumbnail: `1280 x 720`
-- And more ...
+- YouTube thumbnail: `3840 x 2160`
+- Instagram portrait: `1080 x 1350`
+- Story / TikTok: `1080 x 1920`
+- Instagram square: `1080 x 1080`
+- Instagram wide: `1080 x 566`
+- YouTube banner: `2560 x 1440`
+- LinkedIn post: `1200 x 627`
+- X post: `1600 x 900`
+- X header: `1500 x 500`
+- Facebook link: `1200 x 630`
+- Pinterest pin: `1000 x 1500`
 
 Presets use `cover` mode so the output matches the exact requested dimensions with
 a centered local crop. Use `contain` when preserving the full source image is more
@@ -198,8 +216,8 @@ inference API as a fallback.
 - TypeScript
 - Plain CSS
 - Web Workers
-- Browser image APIs: `createImageBitmap`, `OffscreenCanvas`, canvas encoding,
-  object URLs, file input, and drag/drop
+- Browser image APIs: `createImageBitmap`, Canvas 2D, `OffscreenCanvas`, canvas
+  encoding, object URLs, file input, and drag/drop
 - `pica` for high-quality local resizing paths
 - `react-easy-crop` for the interactive crop UI
 - `@huggingface/transformers` with local ONNX Runtime assets for browser
@@ -285,7 +303,8 @@ object-selection masks, and mocked worker PNG output.
 
 Playwright tests cover the browser workflow under the GitHub Pages-style base path:
 importing an image, verifying the live output size preview, applying a resize
-preset, running a resize job, and seeing the output result.
+preset, checking centered preview pan/zoom behavior, inspecting metadata, running
+a metadata edit, running a resize job, and seeing the output result.
 
 Run the main checks:
 
@@ -332,6 +351,8 @@ PrivatePixel is built so basic image editing stays local:
 - Files are read through browser file APIs.
 - Previews use object URLs.
 - Image processing runs in the browser and Web Worker.
+- Metadata inspection and supported metadata rewrites run directly on the local
+  file bytes.
 - Background removal loads bundled local model assets only when the tool runs.
 - Results are returned as local blobs.
 - Downloads are initiated from the browser session.

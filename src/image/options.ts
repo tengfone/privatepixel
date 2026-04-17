@@ -231,6 +231,8 @@ export function applyResizePreset(
     height: preset.height,
     fitMode: preset.fitMode,
     lockAspectRatio: preset.lockAspectRatio,
+    cropAnchorX: options.cropAnchorX ?? 0.5,
+    cropAnchorY: options.cropAnchorY ?? 0.5,
   };
 }
 
@@ -388,6 +390,8 @@ export function createDefaultResizeOptions(asset?: ImageAsset): ResizeOptions {
     height: asset?.height ?? 800,
     lockAspectRatio: true,
     fitMode: "contain",
+    cropAnchorX: 0.5,
+    cropAnchorY: 0.5,
     mimeType: getDefaultOutputMime(asset),
     quality: 0.92,
   };

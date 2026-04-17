@@ -149,6 +149,14 @@ function isUnrotated(rotation: number): boolean {
   return Math.abs(normalizeRotationDegrees(rotation)) < 0.001;
 }
 
+function clampAnchor(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return 0.5;
+  }
+
+  return Math.min(1, Math.max(0, value));
+}
+
 function drawRotatedCrop(
   context: OffscreenCanvasRenderingContext2D,
   bitmap: ImageBitmap,
@@ -254,10 +262,12 @@ async function processResize(
     const coverCanvas = await resizeBitmapToCanvas(bitmap, coverWidth, coverHeight);
     canvas = new OffscreenCanvas(dimensions.width, dimensions.height);
     const context = getContext(canvas);
+    const overflowX = Math.max(0, coverWidth - dimensions.width);
+    const overflowY = Math.max(0, coverHeight - dimensions.height);
     context.drawImage(
       coverCanvas,
-      Math.round((dimensions.width - coverWidth) / 2),
-      Math.round((dimensions.height - coverHeight) / 2),
+      -Math.round(overflowX * clampAnchor(options.cropAnchorX)),
+      -Math.round(overflowY * clampAnchor(options.cropAnchorY)),
     );
   } else {
     canvas = await resizeBitmapToCanvas(bitmap, dimensions.width, dimensions.height);

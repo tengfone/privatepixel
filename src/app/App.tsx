@@ -269,6 +269,40 @@ function clampFramePosition(
   };
 }
 
+function clampUnit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return 0.5;
+  }
+
+  return clampValue(value, 0, 1);
+}
+
+function anchorToFramePosition(
+  anchorX: number | undefined,
+  anchorY: number | undefined,
+  frameWidth: number,
+  frameHeight: number,
+): Point {
+  return {
+    x: Math.max(0, 100 - frameWidth) * clampUnit(anchorX),
+    y: Math.max(0, 100 - frameHeight) * clampUnit(anchorY),
+  };
+}
+
+function framePositionToAnchors(
+  position: Point,
+  frameWidth: number,
+  frameHeight: number,
+): Pick<ResizeOptions, "cropAnchorX" | "cropAnchorY"> {
+  const maxX = Math.max(0, 100 - frameWidth);
+  const maxY = Math.max(0, 100 - frameHeight);
+
+  return {
+    cropAnchorX: maxX > 0 ? clampValue(position.x / maxX, 0, 1) : 0.5,
+    cropAnchorY: maxY > 0 ? clampValue(position.y / maxY, 0, 1) : 0.5,
+  };
+}
+
 export function App() {
   const [assets, setAssets] = useState<ImageAsset[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
@@ -307,6 +341,9 @@ export function App() {
   const objectSelectionTokenRef = useRef(0);
   const objectSelectionJobIdRef = useRef<string | null>(null);
   const activeJobIdsRef = useRef(new Set<string>());
+  const activeJobAssetIdRef = useRef(new Map<string, string>());
+  const activeAssetJobIdsRef = useRef(new Map<string, Set<string>>());
+  const assetIdsRef = useRef(new Set<string>());
   const assetUrlsRef = useRef(new Set<string>());
   const resultUrlsRef = useRef(new Set<string>());
   const selectionUrlsRef = useRef(new Set<string>());
@@ -466,10 +503,54 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    assetIdsRef.current = new Set(assets.map((asset) => asset.id));
+  }, [assets]);
+
   const getWorker = useCallback((): ImageWorkerClient => {
     workerRef.current ??= new ImageWorkerClient();
     return workerRef.current;
   }, []);
+
+  function trackActiveJob(assetId: string, jobId: string): void {
+    activeJobIdsRef.current.add(jobId);
+    activeJobAssetIdRef.current.set(jobId, assetId);
+
+    const assetJobIds = activeAssetJobIdsRef.current.get(assetId) ?? new Set<string>();
+    assetJobIds.add(jobId);
+    activeAssetJobIdsRef.current.set(assetId, assetJobIds);
+  }
+
+  function untrackActiveJob(jobId: string): void {
+    activeJobIdsRef.current.delete(jobId);
+
+    const assetId = activeJobAssetIdRef.current.get(jobId);
+    if (!assetId) {
+      return;
+    }
+
+    activeJobAssetIdRef.current.delete(jobId);
+    const assetJobIds = activeAssetJobIdsRef.current.get(assetId);
+    assetJobIds?.delete(jobId);
+    if (assetJobIds && !assetJobIds.size) {
+      activeAssetJobIdsRef.current.delete(assetId);
+    }
+  }
+
+  function cancelAssetJobs(assetId: string): void {
+    const jobIds = activeAssetJobIdsRef.current.get(assetId);
+    if (!jobIds) {
+      return;
+    }
+
+    for (const jobId of Array.from(jobIds)) {
+      workerRef.current?.cancel(jobId);
+      untrackActiveJob(jobId);
+      if (objectSelectionJobIdRef.current === jobId) {
+        objectSelectionJobIdRef.current = null;
+      }
+    }
+  }
 
   function updateJob(assetId: string, update: Partial<AssetJobView>): void {
     setJobs((current) => ({
@@ -517,7 +598,7 @@ export function App() {
     const jobId = objectSelectionJobIdRef.current;
     if (jobId) {
       workerRef.current?.cancel(jobId);
-      activeJobIdsRef.current.delete(jobId);
+      untrackActiveJob(jobId);
       objectSelectionJobIdRef.current = null;
     }
     replaceObjectSelection(null);
@@ -564,6 +645,13 @@ export function App() {
     const asset = assets.find((candidate) => candidate.id === assetId);
     const result = jobs[assetId]?.result;
 
+    assetIdsRef.current.delete(assetId);
+    cancelAssetJobs(assetId);
+    if (objectSelection?.assetId === assetId) {
+      objectSelectionTokenRef.current += 1;
+      replaceObjectSelection(null);
+    }
+
     if (asset) {
       assetUrlsRef.current.delete(asset.previewUrl);
       revokeImageAsset(asset);
@@ -600,6 +688,7 @@ export function App() {
         URL.revokeObjectURL(result.result.url);
       }
     }
+    assetIdsRef.current.clear();
     setAssets([]);
     setSelectedAssetId(null);
     setJobs({});
@@ -698,7 +787,6 @@ export function App() {
 
     let stale = false;
     const jobId = crypto.randomUUID();
-    const activeJobIds = activeJobIdsRef.current;
     const timeout = window.setTimeout(() => {
       async function calculatePreview(): Promise<void> {
         setSizePreview({
@@ -713,7 +801,7 @@ export function App() {
             return;
           }
 
-          activeJobIds.add(jobId);
+          trackActiveJob(selectedAsset.id, jobId);
           const request: ImageJobRequest = {
             jobId,
             assetId: selectedAsset.id,
@@ -772,7 +860,7 @@ export function App() {
             error: message,
           });
         } finally {
-          activeJobIds.delete(jobId);
+          untrackActiveJob(jobId);
         }
       }
 
@@ -783,7 +871,7 @@ export function App() {
       stale = true;
       window.clearTimeout(timeout);
       workerRef.current?.cancel(jobId);
-      activeJobIds.delete(jobId);
+      untrackActiveJob(jobId);
     };
   }, [
     activeTool,
@@ -811,14 +899,14 @@ export function App() {
     const previousJobId = objectSelectionJobIdRef.current;
     if (previousJobId) {
       workerRef.current?.cancel(previousJobId);
-      activeJobIdsRef.current.delete(previousJobId);
+      untrackActiveJob(previousJobId);
     }
 
     const token = objectSelectionTokenRef.current + 1;
     objectSelectionTokenRef.current = token;
     const jobId = crypto.randomUUID();
     objectSelectionJobIdRef.current = jobId;
-    activeJobIdsRef.current.add(jobId);
+    trackActiveJob(selectedAsset.id, jobId);
     replaceObjectSelection({
       assetId: selectedAsset.id,
       point,
@@ -899,7 +987,7 @@ export function App() {
       });
       setNotice("Could not select that object.");
     } finally {
-      activeJobIdsRef.current.delete(jobId);
+      untrackActiveJob(jobId);
       if (objectSelectionJobIdRef.current === jobId) {
         objectSelectionJobIdRef.current = null;
       }
@@ -908,7 +996,7 @@ export function App() {
 
   async function processAsset(asset: ImageAsset, runToken: number): Promise<void> {
     const jobId = crypto.randomUUID();
-    activeJobIdsRef.current.add(jobId);
+    trackActiveJob(asset.id, jobId);
     updateJob(asset.id, {
       status: "processing",
       progress: 1,
@@ -933,7 +1021,7 @@ export function App() {
       };
 
       const result = await getWorker().process(request, handleProgress);
-      if (runTokenRef.current !== runToken) {
+      if (runTokenRef.current !== runToken || !assetIdsRef.current.has(asset.id)) {
         return;
       }
 
@@ -941,7 +1029,7 @@ export function App() {
       resultUrlsRef.current.add(url);
       setJobResult(asset.id, { ...result, url, tool: activeTool });
     } catch (error) {
-      if (runTokenRef.current !== runToken) {
+      if (runTokenRef.current !== runToken || !assetIdsRef.current.has(asset.id)) {
         return;
       }
 
@@ -952,7 +1040,7 @@ export function App() {
         error: error instanceof Error ? error.message : "Processing failed.",
       });
     } finally {
-      activeJobIdsRef.current.delete(jobId);
+      untrackActiveJob(jobId);
     }
   }
 
@@ -1031,6 +1119,9 @@ export function App() {
       workerRef.current?.cancel(jobId);
     }
     activeJobIdsRef.current.clear();
+    activeJobAssetIdRef.current.clear();
+    activeAssetJobIdsRef.current.clear();
+    objectSelectionJobIdRef.current = null;
     setIsProcessing(false);
     setJobs((current) => {
       const next = { ...current };
@@ -1695,7 +1786,6 @@ function ResizeStage({
   onChange,
   onViewZoomChange,
 }: ResizeStageProps) {
-  const [framePosition, setFramePosition] = useState<Point>({ x: 0, y: 0 });
   const output = calculateResizeDimensions({
     sourceWidth: asset.width,
     sourceHeight: asset.height,
@@ -1707,7 +1797,12 @@ function ResizeStage({
   const frameWidth = clampPercent((output.width / asset.width) * 100);
   const frameHeight = clampPercent((output.height / asset.height) * 100);
   const boundedFramePosition = clampFramePosition(
-    framePosition,
+    anchorToFramePosition(
+      options.cropAnchorX,
+      options.cropAnchorY,
+      frameWidth,
+      frameHeight,
+    ),
     frameWidth,
     frameHeight,
   );
@@ -1802,16 +1897,19 @@ function ResizeStage({
     const handleMove = (moveEvent: globalThis.PointerEvent): void => {
       const deltaX = ((moveEvent.clientX - startX) / rect.width) * 100;
       const deltaY = ((moveEvent.clientY - startY) / rect.height) * 100;
-      setFramePosition(
-        clampFramePosition(
-          {
-            x: initial.x + deltaX,
-            y: initial.y + deltaY,
-          },
-          frameWidth,
-          frameHeight,
-        ),
+      const nextPosition = clampFramePosition(
+        {
+          x: initial.x + deltaX,
+          y: initial.y + deltaY,
+        },
+        frameWidth,
+        frameHeight,
       );
+
+      onChange({
+        ...options,
+        ...framePositionToAnchors(nextPosition, frameWidth, frameHeight),
+      });
     };
     const stop = (): void => {
       window.removeEventListener("pointermove", handleMove);

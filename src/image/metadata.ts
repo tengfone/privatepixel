@@ -50,7 +50,9 @@ const TEXT_DECODER = new TextDecoder();
 const LATIN1_DECODER = new TextDecoder("latin1");
 const PNG_SIGNATURE = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const PNG_TEXT_CHUNKS = new Set(["tEXt", "zTXt", "iTXt"]);
-const WEBP_METADATA_CHUNKS = new Set(["EXIF", "XMP ", "ICCP"]);
+const WEBP_VP8X_ICC_FLAG = 0x20;
+const WEBP_VP8X_EXIF_FLAG = 0x08;
+const WEBP_VP8X_XMP_FLAG = 0x04;
 
 export function getMetadataFormatSupport(mimeType: string): MetadataFormatSupport {
   if (mimeType === "image/jpeg") {
@@ -1351,7 +1353,11 @@ function startsWithAscii(bytes: Uint8Array, value: string): boolean {
 }
 
 function rewriteWebpMetadata(bytes: Uint8Array, options: MetadataOptions): Uint8Array {
-  if (readAscii(bytes, 0, 4) !== "RIFF" || readAscii(bytes, 8, 4) !== "WEBP") {
+  if (
+    bytes.byteLength < 12 ||
+    readAscii(bytes, 0, 4) !== "RIFF" ||
+    readAscii(bytes, 8, 4) !== "WEBP"
+  ) {
     throw new Error("Invalid WebP file.");
   }
 
@@ -1365,7 +1371,17 @@ function rewriteWebpMetadata(bytes: Uint8Array, options: MetadataOptions): Uint8
     throw new Error("Text metadata editing is not supported for WebP yet.");
   }
 
-  const parts: Uint8Array[] = [ascii("RIFF"), new Uint8Array(4), ascii("WEBP")];
+  const chunks: Array<{
+    offset: number;
+    chunkEnd: number;
+    type: string;
+    shouldRemove: boolean;
+  }> = [];
+  const removedMetadata = {
+    icc: false,
+    exif: false,
+    xmp: false,
+  };
   let offset = 12;
 
   while (offset + 8 <= bytes.byteLength) {
@@ -1385,14 +1401,35 @@ function rewriteWebpMetadata(bytes: Uint8Array, options: MetadataOptions): Uint8
 
     const shouldRemove =
       (options.removePrivateData && (type === "EXIF" || type === "XMP ")) ||
-      (!options.preserveColorProfile && type === "ICCP") ||
-      (options.mode === "clean" && WEBP_METADATA_CHUNKS.has(type));
+      (!options.preserveColorProfile && type === "ICCP");
 
-    if (!shouldRemove) {
-      parts.push(bytes.subarray(offset, chunkEnd));
+    if (shouldRemove) {
+      removedMetadata.icc ||= type === "ICCP";
+      removedMetadata.exif ||= type === "EXIF";
+      removedMetadata.xmp ||= type === "XMP ";
     }
 
+    chunks.push({ offset, chunkEnd, type, shouldRemove });
+
     offset = chunkEnd;
+  }
+
+  const parts: Uint8Array[] = [ascii("RIFF"), new Uint8Array(4), ascii("WEBP")];
+  for (const chunk of chunks) {
+    if (chunk.shouldRemove) {
+      continue;
+    }
+
+    if (chunk.type === "VP8X" && chunk.offset + 8 < chunk.chunkEnd) {
+      parts.push(
+        rewriteWebpVp8xFlags(
+          bytes.subarray(chunk.offset, chunk.chunkEnd),
+          removedMetadata,
+        ),
+      );
+    } else {
+      parts.push(bytes.subarray(chunk.offset, chunk.chunkEnd));
+    }
   }
 
   const output = concatBytes(parts);
@@ -1404,33 +1441,58 @@ function rewriteWebpMetadata(bytes: Uint8Array, options: MetadataOptions): Uint8
   return output;
 }
 
-function rewriteSvgMetadata(bytes: Uint8Array, options: MetadataOptions): Uint8Array {
-  const text = TEXT_DECODER.decode(bytes);
-  const parser = new DOMParser();
-  const document = parser.parseFromString(text, "image/svg+xml");
-  const parseError = document.querySelector("parsererror");
+function rewriteWebpVp8xFlags(
+  chunk: Uint8Array,
+  removedMetadata: { icc: boolean; exif: boolean; xmp: boolean },
+): Uint8Array {
+  const output = new Uint8Array(chunk);
+  let removedFlags = 0;
 
-  if (parseError || document.documentElement.localName.toLowerCase() !== "svg") {
-    throw new Error("Invalid SVG file.");
+  if (removedMetadata.icc) {
+    removedFlags |= WEBP_VP8X_ICC_FLAG;
+  }
+  if (removedMetadata.exif) {
+    removedFlags |= WEBP_VP8X_EXIF_FLAG;
+  }
+  if (removedMetadata.xmp) {
+    removedFlags |= WEBP_VP8X_XMP_FLAG;
   }
 
-  const root = document.documentElement;
+  output[8] &= ~removedFlags;
+  return output;
+}
+
+function rewriteSvgMetadata(bytes: Uint8Array, options: MetadataOptions): Uint8Array {
+  let text = TEXT_DECODER.decode(bytes);
+  assertSvgDocument(text);
 
   if (options.removePrivateData || options.mode === "edit") {
-    document.querySelectorAll("metadata").forEach((node) => node.remove());
+    text = removeSvgElementsByTagName(text, "metadata");
   }
 
   if (options.removeComments) {
-    removeComments(document);
+    text = removeSvgCommentsFromText(text);
   }
 
   if (options.sanitizeSvg) {
-    sanitizeSvg(document);
+    text = sanitizeSvgText(text);
   }
 
   if (options.mode === "edit") {
-    setSvgTextElement(document, root, "title", options.fields.title);
-    setSvgTextElement(document, root, "desc", options.fields.description);
+    text = removeSvgElementsByTagName(text, "title");
+    text = removeSvgElementsByTagName(text, "desc");
+
+    const insertion: string[] = [];
+    const title = options.fields.title.trim();
+    const description = options.fields.description.trim();
+
+    if (title) {
+      insertion.push(`<title>${escapeXmlText(title)}</title>`);
+    }
+
+    if (description) {
+      insertion.push(`<desc>${escapeXmlText(description)}</desc>`);
+    }
 
     const plainMetadata = buildPlainTextMetadata(
       {
@@ -1441,77 +1503,82 @@ function rewriteSvgMetadata(bytes: Uint8Array, options: MetadataOptions): Uint8A
       options.customTextFields,
     );
     if (plainMetadata) {
-      const metadata = document.createElementNS(root.namespaceURI, "metadata");
-      metadata.setAttribute("id", "privatepixel-metadata");
-      metadata.textContent = plainMetadata;
-      root.insertBefore(metadata, root.firstChild);
+      insertion.push(
+        `<metadata id="privatepixel-metadata">${escapeXmlText(plainMetadata)}</metadata>`,
+      );
+    }
+
+    if (insertion.length) {
+      text = insertIntoSvgRoot(text, insertion.join(""));
     }
   }
 
-  const serialized = new XMLSerializer().serializeToString(document);
-  return TEXT_ENCODER.encode(serialized);
+  return TEXT_ENCODER.encode(text);
 }
 
-function setSvgTextElement(
-  document: XMLDocument,
-  root: Element,
-  tagName: "title" | "desc",
-  value: string,
-): void {
-  const existing = Array.from(root.children).find(
-    (child) => child.localName.toLowerCase() === tagName,
+function assertSvgDocument(text: string): void {
+  if (!/<svg(?:\s|>)/i.test(text)) {
+    throw new Error("Invalid SVG file.");
+  }
+}
+
+function removeSvgElementsByTagName(text: string, tagName: string): string {
+  const pairedElement = new RegExp(
+    `<${tagName}\\b[^>]*>[\\s\\S]*?<\\/${tagName}\\s*>`,
+    "gi",
   );
-  const trimmed = value.trim();
-
-  if (!trimmed) {
-    existing?.remove();
-    return;
-  }
-
-  const element = existing ?? document.createElementNS(root.namespaceURI, tagName);
-  element.textContent = trimmed;
-
-  if (!existing) {
-    root.insertBefore(element, root.firstChild);
-  }
+  const selfClosingElement = new RegExp(`<${tagName}\\b[^>]*/\\s*>`, "gi");
+  return text.replace(pairedElement, "").replace(selfClosingElement, "");
 }
 
-function removeComments(document: XMLDocument): void {
-  const comments: ChildNode[] = [];
-
-  function walk(node: Node): void {
-    for (const child of Array.from(node.childNodes)) {
-      if (child.nodeType === 8) {
-        comments.push(child);
-      } else {
-        walk(child);
-      }
-    }
-  }
-
-  walk(document);
-  comments.forEach((comment) => comment.remove());
+function removeSvgCommentsFromText(text: string): string {
+  return text.replace(/<!--[\s\S]*?-->/g, "");
 }
 
-function sanitizeSvg(document: XMLDocument): void {
-  document.querySelectorAll("script, foreignObject").forEach((node) => node.remove());
+function sanitizeSvgText(text: string): string {
+  const withoutActiveContent = removeSvgElementsByTagName(
+    removeSvgElementsByTagName(text, "script"),
+    "foreignObject",
+  );
 
-  document.querySelectorAll("*").forEach((element) => {
-    for (const attribute of Array.from(element.attributes)) {
-      const name = attribute.name.toLowerCase();
-      const value = attribute.value.trim().toLowerCase();
-      const isEvent = name.startsWith("on");
-      const isReference = name === "href" || name === "xlink:href";
-      const isUnsafeReference =
-        isReference &&
-        (value.startsWith("http:") ||
-          value.startsWith("https:") ||
-          value.startsWith("//") ||
-          value.startsWith("javascript:"));
+  return withoutActiveContent
+    .replace(/\s+on[a-z][\w:.-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s+(?:xlink:)?href\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, (attribute) => {
+      const value = attribute
+        .slice(attribute.indexOf("=") + 1)
+        .trim()
+        .replace(/^["']|["']$/g, "")
+        .toLowerCase();
 
-      if (isEvent || isUnsafeReference) {
-        element.removeAttribute(attribute.name);
-      }
-    }
-  });
+      return value.startsWith("http:") ||
+        value.startsWith("https:") ||
+        value.startsWith("//") ||
+        value.startsWith("javascript:")
+        ? ""
+        : attribute;
+    });
+}
+
+function insertIntoSvgRoot(text: string, insertion: string): string {
+  const rootMatch = /<svg\b[^>]*>/i.exec(text);
+  if (!rootMatch) {
+    throw new Error("Invalid SVG file.");
+  }
+
+  const rootTag = rootMatch[0];
+  const rootStart = rootMatch.index;
+  const rootEnd = rootStart + rootTag.length;
+
+  if (/\/\s*>$/.test(rootTag)) {
+    const openRootTag = rootTag.replace(/\/\s*>$/, ">");
+    return `${text.slice(0, rootStart)}${openRootTag}${insertion}</svg>${text.slice(
+      rootEnd,
+    )}`;
+  }
+
+  return `${text.slice(0, rootEnd)}${insertion}${text.slice(rootEnd)}`;
+}
+
+function escapeXmlText(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

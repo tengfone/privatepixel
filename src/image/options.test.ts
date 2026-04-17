@@ -155,6 +155,8 @@ describe("image option helpers", () => {
     ).toMatchObject({
       width: 1600,
       height: 900,
+      cropAnchorX: 0.5,
+      cropAnchorY: 0.5,
       mimeType: "image/jpeg",
       quality: 0.92,
     });
@@ -172,6 +174,8 @@ describe("image option helpers", () => {
           height: 300,
           fitMode: "contain",
           lockAspectRatio: false,
+          cropAnchorX: 0.25,
+          cropAnchorY: 0.75,
           mimeType: "image/avif",
           quality: 0.6,
         },
@@ -182,6 +186,8 @@ describe("image option helpers", () => {
       height: 1024,
       fitMode: "cover",
       lockAspectRatio: true,
+      cropAnchorX: 0.25,
+      cropAnchorY: 0.75,
       mimeType: "image/avif",
       quality: 0.6,
     });
