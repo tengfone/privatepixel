@@ -42,6 +42,7 @@ test("imports an image and produces a resize result", async ({ page }) => {
 
   await page.getByRole("button", { name: /Compress/ }).click();
   await expect(page.locator(".preview-canvas").first()).toBeVisible();
+  await expect(page.locator(".preview-stage figure")).toHaveCount(1);
   const compressStageHeight = await page
     .locator(".editor-stage")
     .evaluate((element) => element.getBoundingClientRect().height);

@@ -63,11 +63,15 @@ type CropAspect = "original" | "1:1" | "4:3" | "16:9";
 type ResizeHandle = "width" | "height" | "both";
 type AvailableImageTool = ImageTool;
 
+interface ToolProcessedImageResult extends ProcessedImageResult {
+  tool: AvailableImageTool;
+}
+
 interface AssetJobView {
   status: JobStatus;
   progress: number;
   message: string;
-  result?: ProcessedImageResult;
+  result?: ToolProcessedImageResult;
   error?: string;
 }
 
@@ -269,7 +273,7 @@ export function App() {
     () =>
       assets
         .map((asset) => getJobView(jobs, asset.id).result)
-        .filter((result): result is ProcessedImageResult => Boolean(result)),
+        .filter((result): result is ToolProcessedImageResult => Boolean(result)),
     [assets, jobs],
   );
   const activeToolCannotRun =
@@ -390,7 +394,7 @@ export function App() {
     }));
   }
 
-  function setJobResult(assetId: string, result: ProcessedImageResult): void {
+  function setJobResult(assetId: string, result: ToolProcessedImageResult): void {
     setJobs((current) => {
       const previous = current[assetId]?.result;
       if (previous) {
@@ -705,7 +709,7 @@ export function App() {
 
       const url = URL.createObjectURL(result.blob);
       resultUrlsRef.current.add(url);
-      setJobResult(asset.id, { ...result, url });
+      setJobResult(asset.id, { ...result, url, tool: activeTool });
     } catch (error) {
       if (runTokenRef.current !== runToken) {
         return;
@@ -960,9 +964,7 @@ export function App() {
             <ResizeControls
               asset={selectedAsset}
               options={resizeOptions}
-              viewZoom={resizeViewZoom}
               onChange={setResizeOptions}
-              onViewZoomChange={setResizeViewZoom}
             />
           ) : null}
 
@@ -1172,7 +1174,7 @@ function EditorStage({
   onCropRotationChange,
   onCropAreaChange,
 }: EditorStageProps) {
-  const result = job.result;
+  const result = job.result?.tool === activeTool ? job.result : undefined;
 
   if (activeTool === "crop") {
     return (
@@ -1613,18 +1615,10 @@ function SizePreviewPanel({ asset, preview }: SizePreviewPanelProps) {
 interface ResizeControlsProps {
   asset?: ImageAsset;
   options: ResizeOptions;
-  viewZoom: number;
   onChange: (options: ResizeOptions) => void;
-  onViewZoomChange: (zoom: number) => void;
 }
 
-function ResizeControls({
-  asset,
-  options,
-  viewZoom,
-  onChange,
-  onViewZoomChange,
-}: ResizeControlsProps) {
+function ResizeControls({ asset, options, onChange }: ResizeControlsProps) {
   function resizeWithLinkedRatio(
     next: Partial<Pick<ResizeOptions, "width" | "height">>,
   ) {
@@ -1727,13 +1721,6 @@ function ResizeControls({
       <MimeSelect
         value={options.mimeType}
         onChange={(mimeType) => onChange({ ...options, mimeType })}
-      />
-      <QualityField
-        value={viewZoom}
-        label="View zoom"
-        min={0.5}
-        max={3}
-        onChange={onViewZoomChange}
       />
       {asset ? (
         <button
