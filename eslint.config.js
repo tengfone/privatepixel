@@ -4,7 +4,15 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "coverage", "src/wasm/generated"] },
+  {
+    ignores: [
+      "dist",
+      "coverage",
+      "src/wasm/generated",
+      "public/models",
+      "public/vendor",
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

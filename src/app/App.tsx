@@ -25,7 +25,9 @@ import {
   calculateRotatedDimensions,
   clampQuality,
   createDefaultCompressOptions,
+  createDefaultRemoveBackgroundOptions,
   createDefaultResizeOptions,
+  getDefaultOutputMime,
   getMimeLabel,
   getOutputSizeDelta,
   isSupportedInputMime,
@@ -42,6 +44,8 @@ import type {
   ImageTool,
   OutputMimeType,
   ProcessedImageResult,
+  RemoveBackgroundMode,
+  RemoveBackgroundOptions,
   ResizeFitMode,
   ResizeOptions,
 } from "../image/types";
@@ -97,10 +101,32 @@ const TOOL_LABELS: Record<ImageTool, string> = {
 
 const TOOL_COPY: Record<ImageTool, string> = {
   resize: "Drag the frame, zoom the canvas, or set exact output dimensions.",
-  compress: "Set format, quality, and maximum edge length.",
+  compress: "Make a smaller file with local browser encoding.",
   convert: "Choose a target image format.",
   crop: "Drag, zoom, rotate, and export the selected area.",
-  "remove-background": "Offline background removal needs a local model bundle.",
+  "remove-background": "Create a transparent PNG with local background removal.",
+};
+
+const REMOVE_BACKGROUND_MODE_COPY: Record<
+  RemoveBackgroundMode,
+  { label: string; detail: string }
+> = {
+  auto: {
+    label: "Auto",
+    detail: "Detects faces locally, then chooses a portrait or object model.",
+  },
+  portrait: {
+    label: "Portrait (faster/lighter)",
+    detail: "Uses MODNet for people and headshots.",
+  },
+  general: {
+    label: "General objects",
+    detail: "Uses RMBG-1.4 for products, animals, logos, and mixed scenes.",
+  },
+  best: {
+    label: "Best result",
+    detail: "Runs the routed model and fallback, then keeps the cleaner mask.",
+  },
 };
 
 const CROP_ASPECTS: Record<Exclude<CropAspect, "original">, number> = {
@@ -127,14 +153,14 @@ function createConvertOptions(): ConvertOptions {
   };
 }
 
-function createCropPercentOptions(): CropPercentOptions {
+function createCropPercentOptions(asset?: ImageAsset): CropPercentOptions {
   return {
     x: 0,
     y: 0,
     width: 100,
     height: 100,
     rotation: 0,
-    mimeType: "image/png",
+    mimeType: getDefaultOutputMime(asset),
     quality: 0.92,
   };
 }
@@ -201,11 +227,14 @@ export function App() {
   );
   const [convertOptions, setConvertOptions] =
     useState<ConvertOptions>(createConvertOptions());
+  const [removeBackgroundOptions, setRemoveBackgroundOptions] =
+    useState<RemoveBackgroundOptions>(createDefaultRemoveBackgroundOptions());
   const [cropAspect, setCropAspect] = useState<CropAspect>("original");
   const [cropPercent, setCropPercent] = useState(createCropPercentOptions);
   const [cropPosition, setCropPosition] = useState<Point>({ x: 0, y: 0 });
   const [cropZoom, setCropZoom] = useState(1);
   const [resizeViewZoom, setResizeViewZoom] = useState(1);
+  const [previewViewZoom, setPreviewViewZoom] = useState(1);
   const [concurrency, setConcurrency] = useState(2);
   const [notice, setNotice] = useState("Images stay in this browser session.");
   const [sizePreview, setSizePreview] = useState<SizePreviewState>(EMPTY_SIZE_PREVIEW);
@@ -231,7 +260,6 @@ export function App() {
     [assets, jobs],
   );
 
-  const activeToolDisabled = activeTool === "remove-background";
   const sizePreviewKey = useMemo(
     () =>
       selectedAsset
@@ -259,10 +287,10 @@ export function App() {
       return EMPTY_SIZE_PREVIEW;
     }
 
-    if (activeToolDisabled) {
+    if (activeTool === "remove-background") {
       return {
         status: "idle",
-        message: "Local model output size appears after the model bundle ships.",
+        message: "Run Remove BG to create a transparent PNG. Models load only when needed.",
       };
     }
 
@@ -282,7 +310,7 @@ export function App() {
     }
 
     return sizePreview;
-  }, [activeToolDisabled, isProcessing, selectedAsset, sizePreview, sizePreviewKey]);
+  }, [activeTool, isProcessing, selectedAsset, sizePreview, sizePreviewKey]);
 
   useEffect(() => {
     const activeJobIds = activeJobIdsRef.current;
@@ -366,6 +394,7 @@ export function App() {
     if (!assets.length && imported[0]) {
       setSelectedAssetId(imported[0].id);
       setResizeOptions(createDefaultResizeOptions(imported[0]));
+      setCropPercent(createCropPercentOptions(imported[0]));
     }
     setNotice(
       failed
@@ -458,14 +487,21 @@ export function App() {
 
       return {
         type: "remove-background",
-        options: { outputMimeType: "image/png" },
+        options: removeBackgroundOptions,
       };
     },
-    [activeTool, compressOptions, convertOptions, cropPercent, resizeOptions],
+    [
+      activeTool,
+      compressOptions,
+      convertOptions,
+      cropPercent,
+      removeBackgroundOptions,
+      resizeOptions,
+    ],
   );
 
   useEffect(() => {
-    if (!selectedAsset || activeToolDisabled || isProcessing) {
+    if (!selectedAsset || activeTool === "remove-background" || isProcessing) {
       return;
     }
 
@@ -557,7 +593,7 @@ export function App() {
       activeJobIds.delete(jobId);
     };
   }, [
-    activeToolDisabled,
+    activeTool,
     getWorker,
     buildOperation,
     isProcessing,
@@ -627,15 +663,14 @@ export function App() {
       return;
     }
 
-    if (activeToolDisabled) {
-      setNotice("Add a bundled local model before enabling background removal.");
-      return;
-    }
-
     const runToken = runTokenRef.current + 1;
     runTokenRef.current = runToken;
     setIsProcessing(true);
-    setNotice(`Running ${TOOL_LABELS[activeTool].toLowerCase()} locally.`);
+    setNotice(
+      activeTool === "remove-background"
+        ? "Running Remove BG locally. Models load on first use."
+        : `Running ${TOOL_LABELS[activeTool].toLowerCase()} locally.`,
+    );
 
     setJobs((current) => {
       const next = { ...current };
@@ -652,7 +687,10 @@ export function App() {
     });
 
     let cursor = 0;
-    const workerCount = Math.min(Math.max(1, concurrency), assets.length);
+    const workerCount =
+      activeTool === "remove-background"
+        ? 1
+        : Math.min(Math.max(1, concurrency), assets.length);
 
     async function consumeQueue(): Promise<void> {
       while (runTokenRef.current === runToken) {
@@ -806,12 +844,14 @@ export function App() {
               job={getJobView(jobs, selectedAsset.id)}
               resizeOptions={resizeOptions}
               resizeViewZoom={resizeViewZoom}
+              previewViewZoom={previewViewZoom}
               cropAspect={cropAspect}
               cropPosition={cropPosition}
               cropZoom={cropZoom}
               cropRotation={cropPercent.rotation}
               onResizeChange={setResizeOptions}
               onResizeViewZoomChange={setResizeViewZoom}
+              onPreviewViewZoomChange={setPreviewViewZoom}
               onCropPositionChange={setCropPosition}
               onCropZoomChange={setCropZoom}
               onCropRotationChange={(rotation) =>
@@ -881,24 +921,21 @@ export function App() {
             />
           ) : null}
 
-          <SizePreviewPanel asset={selectedAsset} preview={displayedSizePreview} />
-
           {activeTool === "remove-background" ? (
-            <div className="runtime-note">
-              <p className="eyebrow">Not installed</p>
-              <h3>Local cutout model pending.</h3>
-              <p>
-                This tool is disabled until a bundled browser model is added. There is
-                no upload fallback.
-              </p>
-            </div>
+            <RemoveBackgroundControls
+              options={removeBackgroundOptions}
+              onChange={setRemoveBackgroundOptions}
+            />
           ) : null}
+
+          <SizePreviewPanel asset={selectedAsset} preview={displayedSizePreview} />
 
           <div className="runbar">
             <label>
               Batch workers
               <select
                 value={concurrency}
+                disabled={activeTool === "remove-background"}
                 onChange={(event) => setConcurrency(Number(event.target.value))}
               >
                 <option value={1}>1</option>
@@ -908,7 +945,7 @@ export function App() {
             <button
               type="button"
               onClick={() => void processBatch()}
-              disabled={isProcessing || activeToolDisabled || !assets.length}
+              disabled={isProcessing || !assets.length}
               data-testid="run-tool"
             >
               Run {TOOL_LABELS[activeTool]}
@@ -966,6 +1003,7 @@ export function App() {
                 onSelect={() => {
                   setSelectedAssetId(asset.id);
                   setResizeOptions(createDefaultResizeOptions(asset));
+                  setCropPercent(createCropPercentOptions(asset));
                 }}
               />
             ))}
@@ -1003,12 +1041,14 @@ interface EditorStageProps {
   job: AssetJobView;
   resizeOptions: ResizeOptions;
   resizeViewZoom: number;
+  previewViewZoom: number;
   cropAspect: CropAspect;
   cropPosition: Point;
   cropZoom: number;
   cropRotation: number;
   onResizeChange: (options: ResizeOptions) => void;
   onResizeViewZoomChange: (zoom: number) => void;
+  onPreviewViewZoomChange: (zoom: number) => void;
   onCropPositionChange: (position: Point) => void;
   onCropZoomChange: (zoom: number) => void;
   onCropRotationChange: (rotation: number) => void;
@@ -1021,12 +1061,14 @@ function EditorStage({
   job,
   resizeOptions,
   resizeViewZoom,
+  previewViewZoom,
   cropAspect,
   cropPosition,
   cropZoom,
   cropRotation,
   onResizeChange,
   onResizeViewZoomChange,
+  onPreviewViewZoomChange,
   onCropPositionChange,
   onCropZoomChange,
   onCropRotationChange,
@@ -1072,17 +1114,65 @@ function EditorStage({
   }
 
   return (
+    <PreviewStage
+      asset={asset}
+      result={result}
+      viewZoom={previewViewZoom}
+      onViewZoomChange={onPreviewViewZoomChange}
+    />
+  );
+}
+
+interface PreviewStageProps {
+  asset: ImageAsset;
+  result?: ProcessedImageResult;
+  viewZoom: number;
+  onViewZoomChange: (zoom: number) => void;
+}
+
+function PreviewStage({
+  asset,
+  result,
+  viewZoom,
+  onViewZoomChange,
+}: PreviewStageProps) {
+  function changeViewZoom(nextZoom: number): void {
+    onViewZoomChange(clampValue(nextZoom, 0.5, 3));
+  }
+
+  return (
     <div
       className={`editor-stage preview-stage ${
         result ? "preview-stage-compare" : "preview-stage-single"
       } swiss-grid-pattern`}
+      onWheel={(event) => {
+        event.preventDefault();
+        changeViewZoom(viewZoom + (event.deltaY > 0 ? -0.1 : 0.1));
+      }}
     >
+      <div className="resize-zoom-tools" aria-label="Preview zoom controls">
+        <button type="button" onClick={() => changeViewZoom(viewZoom - 0.25)}>
+          -
+        </button>
+        <span>{Math.round(viewZoom * 100)}%</span>
+        <button type="button" onClick={() => changeViewZoom(viewZoom + 0.25)}>
+          +
+        </button>
+      </div>
       <figure>
-        <img src={asset.previewUrl} alt={`Selected ${asset.name}`} />
+        <img
+          src={asset.previewUrl}
+          alt={`Selected ${asset.name}`}
+          style={{ transform: `scale(${viewZoom})` }}
+        />
       </figure>
       {result ? (
         <figure>
-          <img src={result.url} alt={`Processed ${asset.name}`} />
+          <img
+            src={result.url}
+            alt={`Processed ${asset.name}`}
+            style={{ transform: `scale(${viewZoom})` }}
+          />
         </figure>
       ) : null}
       <StageMeta asset={asset} result={result} />
@@ -1143,18 +1233,21 @@ function ResizeStage({
       handle === "width" ? options.height : Math.round(asset.height * heightRatio);
 
     if (options.lockAspectRatio) {
-      const sourceRatio = asset.width / asset.height;
+      const lockedRatio =
+        options.width > 0 && options.height > 0
+          ? options.width / options.height
+          : asset.width / asset.height;
       if (handle === "height") {
         onChange({
           ...options,
-          width: Math.max(1, Math.round(nextHeight * sourceRatio)),
+          width: Math.max(1, Math.round(nextHeight * lockedRatio)),
           height: Math.max(1, nextHeight),
         });
       } else {
         onChange({
           ...options,
           width: Math.max(1, nextWidth),
-          height: Math.max(1, Math.round(nextWidth / sourceRatio)),
+          height: Math.max(1, Math.round(nextWidth / lockedRatio)),
         });
       }
       return;
@@ -1368,20 +1461,71 @@ function ResizeControls({
   onChange,
   onViewZoomChange,
 }: ResizeControlsProps) {
+  function resizeWithLinkedRatio(
+    next: Partial<Pick<ResizeOptions, "width" | "height">>,
+  ) {
+    const currentRatio =
+      options.width > 0 && options.height > 0
+        ? options.width / options.height
+        : (asset?.width ?? 1) / (asset?.height ?? 1);
+
+    if (!options.lockAspectRatio || currentRatio <= 0) {
+      onChange({ ...options, ...next });
+      return;
+    }
+
+    if (typeof next.width === "number") {
+      onChange({
+        ...options,
+        width: next.width,
+        height: Math.max(1, Math.round(next.width / currentRatio)),
+      });
+      return;
+    }
+
+    if (typeof next.height === "number") {
+      onChange({
+        ...options,
+        width: Math.max(1, Math.round(next.height * currentRatio)),
+        height: next.height,
+      });
+      return;
+    }
+
+    onChange({ ...options, ...next });
+  }
+
   return (
     <div className="control-stack">
-      <NumberField
-        label="Width"
-        value={options.width}
-        min={1}
-        onChange={(width) => onChange({ ...options, width })}
-      />
-      <NumberField
-        label="Height"
-        value={options.height}
-        min={1}
-        onChange={(height) => onChange({ ...options, height })}
-      />
+      <div className="dimension-controls">
+        <NumberField
+          label="Width"
+          value={options.width}
+          min={1}
+          onChange={(width) => resizeWithLinkedRatio({ width })}
+        />
+        <button
+          type="button"
+          className={
+            options.lockAspectRatio ? "active aspect-lock" : "secondary aspect-lock"
+          }
+          aria-pressed={options.lockAspectRatio}
+          onClick={() =>
+            onChange({
+              ...options,
+              lockAspectRatio: !options.lockAspectRatio,
+            })
+          }
+        >
+          {options.lockAspectRatio ? "Locked" : "Unlocked"}
+        </button>
+        <NumberField
+          label="Height"
+          value={options.height}
+          min={1}
+          onChange={(height) => resizeWithLinkedRatio({ height })}
+        />
+      </div>
       <div className="resize-presets" aria-label="Common resize targets">
         <p className="eyebrow">Common sizes</p>
         <div className="preset-grid">
@@ -1421,26 +1565,12 @@ function ResizeControls({
         onChange={(mimeType) => onChange({ ...options, mimeType })}
       />
       <QualityField
-        value={options.quality}
-        onChange={(quality) => onChange({ ...options, quality })}
-      />
-      <QualityField
         value={viewZoom}
         label="View zoom"
         min={0.5}
         max={3}
         onChange={onViewZoomChange}
       />
-      <label className="checkbox-field">
-        <input
-          type="checkbox"
-          checked={options.lockAspectRatio}
-          onChange={(event) =>
-            onChange({ ...options, lockAspectRatio: event.target.checked })
-          }
-        />
-        Lock aspect ratio
-      </label>
       {asset ? (
         <button
           className="secondary"
@@ -1468,13 +1598,10 @@ function CompressControls({ options, onChange }: CompressControlsProps) {
       />
       <QualityField
         value={options.quality}
+        label="Image quality"
+        min={0.2}
+        max={0.95}
         onChange={(quality) => onChange({ ...options, quality })}
-      />
-      <NumberField
-        label="Max dimension"
-        value={options.maxDimension}
-        min={1}
-        onChange={(maxDimension) => onChange({ ...options, maxDimension })}
       />
     </div>
   );
@@ -1491,10 +1618,6 @@ function ConvertControls({ options, onChange }: ConvertControlsProps) {
       <MimeSelect
         value={options.mimeType}
         onChange={(mimeType) => onChange({ ...options, mimeType })}
-      />
-      <QualityField
-        value={options.quality}
-        onChange={(quality) => onChange({ ...options, quality })}
       />
     </div>
   );
@@ -1545,10 +1668,54 @@ function CropControls({
         value={cropPercent.mimeType}
         onChange={(mimeType) => onCropPercentChange({ ...cropPercent, mimeType })}
       />
-      <QualityField
-        value={cropPercent.quality}
-        onChange={(quality) => onCropPercentChange({ ...cropPercent, quality })}
-      />
+    </div>
+  );
+}
+
+interface RemoveBackgroundControlsProps {
+  options: RemoveBackgroundOptions;
+  onChange: (options: RemoveBackgroundOptions) => void;
+}
+
+function RemoveBackgroundControls({
+  options,
+  onChange,
+}: RemoveBackgroundControlsProps) {
+  const selectedCopy = REMOVE_BACKGROUND_MODE_COPY[options.mode];
+
+  return (
+    <div className="control-stack">
+      <div className="runtime-note runtime-note-ready">
+        <p className="eyebrow">Local only</p>
+        <h3>Transparent PNG</h3>
+        <p>
+          Auto chooses MODNet for portraits and RMBG-1.4 for general objects.
+        </p>
+      </div>
+      <details className="advanced-panel">
+        <summary>Advanced</summary>
+        <label>
+          Cutout model
+          <select
+            value={options.mode}
+            onChange={(event) =>
+              onChange({
+                ...options,
+                mode: event.target.value as RemoveBackgroundMode,
+              })
+            }
+          >
+            {(Object.keys(REMOVE_BACKGROUND_MODE_COPY) as RemoveBackgroundMode[]).map(
+              (mode) => (
+                <option key={mode} value={mode}>
+                  {REMOVE_BACKGROUND_MODE_COPY[mode].label}
+                </option>
+              ),
+            )}
+          </select>
+        </label>
+        <p>{selectedCopy.detail}</p>
+      </details>
     </div>
   );
 }

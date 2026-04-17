@@ -7,7 +7,10 @@ import {
   calculateRotatedDimensions,
   clampQuality,
   createCenteredCrop,
+  createDefaultRemoveBackgroundOptions,
+  createDefaultResizeOptions,
   createOutputFilename,
+  getDefaultOutputMime,
   mimeToExtension,
   normalizeCropOptions,
   normalizeRotationDegrees,
@@ -136,6 +139,27 @@ describe("image option helpers", () => {
     });
   });
 
+  it("uses the original supported MIME type for resize output defaults", () => {
+    expect(
+      createDefaultResizeOptions({
+        id: "asset-1",
+        file: new File([], "photo.jpg", { type: "image/jpeg" }),
+        name: "photo.jpg",
+        mimeType: "image/jpeg",
+        size: 0,
+        width: 1600,
+        height: 900,
+        previewUrl: "blob:photo",
+      }),
+    ).toMatchObject({
+      width: 1600,
+      height: 900,
+      mimeType: "image/jpeg",
+      quality: 0.92,
+    });
+    expect(getDefaultOutputMime({ mimeType: "image/gif" } as never)).toBe("image/png");
+  });
+
   it("applies common resize presets without changing output format", () => {
     const preset = RESIZE_PRESETS.find((candidate) => candidate.id === "slack-avatar");
 
@@ -159,6 +183,40 @@ describe("image option helpers", () => {
       lockAspectRatio: true,
       mimeType: "image/avif",
       quality: 0.6,
+    });
+  });
+
+  it("includes current high-use social resize presets", () => {
+    expect(
+      RESIZE_PRESETS.map((preset) => [preset.id, preset.width, preset.height]),
+    ).toEqual(
+      expect.arrayContaining([
+        ["youtube-thumbnail", 3840, 2160],
+        ["instagram-feed-portrait", 1080, 1350],
+        ["vertical-story", 1080, 1920],
+        ["linkedin-post", 1200, 627],
+        ["x-header", 1500, 500],
+        ["pinterest-pin", 1000, 1500],
+      ]),
+    );
+  });
+
+  it("defaults background removal to auto PNG output", () => {
+    expect(createDefaultRemoveBackgroundOptions()).toEqual({
+      outputMimeType: "image/png",
+      mode: "auto",
+    });
+  });
+
+  it("serializes background removal mode options for worker requests", () => {
+    const options = {
+      ...createDefaultRemoveBackgroundOptions(),
+      mode: "general" as const,
+    };
+
+    expect(JSON.parse(JSON.stringify(options))).toEqual({
+      outputMimeType: "image/png",
+      mode: "general",
     });
   });
 });

@@ -4,6 +4,7 @@ import type {
   ImageAsset,
   ImageTool,
   OutputMimeType,
+  RemoveBackgroundOptions,
   ResizeFitMode,
   ResizeOptions,
 } from "./types";
@@ -41,6 +42,12 @@ export function isSupportedInputMime(mimeType: string): boolean {
 
 export function getMimeLabel(mimeType: OutputMimeType): string {
   return MIME_LABELS[mimeType];
+}
+
+export function getDefaultOutputMime(asset?: ImageAsset): OutputMimeType {
+  return asset && OUTPUT_MIME_TYPES.includes(asset.mimeType as OutputMimeType)
+    ? (asset.mimeType as OutputMimeType)
+    : "image/png";
 }
 
 export function mimeToExtension(mimeType: OutputMimeType): string {
@@ -101,10 +108,37 @@ export interface ResizePreset {
 export const RESIZE_PRESETS: ResizePreset[] = [
   {
     id: "slack-avatar",
-    label: "Slack avatar",
-    detail: "Square profile",
+    label: "Slack profile",
+    detail: "Avatar max",
     width: 1024,
     height: 1024,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "youtube-thumbnail",
+    label: "YouTube thumbnail",
+    detail: "Video cover 16:9",
+    width: 3840,
+    height: 2160,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "instagram-feed-portrait",
+    label: "Instagram portrait",
+    detail: "Feed 4:5",
+    width: 1080,
+    height: 1350,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "vertical-story",
+    label: "Story / TikTok",
+    detail: "Vertical 9:16",
+    width: 1080,
+    height: 1920,
     fitMode: "cover",
     lockAspectRatio: true,
   },
@@ -114,24 +148,6 @@ export const RESIZE_PRESETS: ResizePreset[] = [
     detail: "Feed 1:1",
     width: 1080,
     height: 1080,
-    fitMode: "cover",
-    lockAspectRatio: true,
-  },
-  {
-    id: "instagram-portrait",
-    label: "Instagram portrait",
-    detail: "Feed 4:5",
-    width: 1080,
-    height: 1350,
-    fitMode: "cover",
-    lockAspectRatio: true,
-  },
-  {
-    id: "instagram-story",
-    label: "Instagram story",
-    detail: "Story/Reel 9:16",
-    width: 1080,
-    height: 1920,
     fitMode: "cover",
     lockAspectRatio: true,
   },
@@ -150,6 +166,51 @@ export const RESIZE_PRESETS: ResizePreset[] = [
     detail: "Channel art",
     width: 2560,
     height: 1440,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "linkedin-post",
+    label: "LinkedIn post",
+    detail: "Link preview",
+    width: 1200,
+    height: 627,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "x-post",
+    label: "X post",
+    detail: "Timeline 16:9",
+    width: 1600,
+    height: 900,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "x-header",
+    label: "X header",
+    detail: "Banner 3:1",
+    width: 1500,
+    height: 500,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "facebook-link",
+    label: "Facebook link",
+    detail: "Feed preview",
+    width: 1200,
+    height: 630,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "pinterest-pin",
+    label: "Pinterest pin",
+    detail: "Standard 2:3",
+    width: 1000,
+    height: 1500,
     fitMode: "cover",
     lockAspectRatio: true,
   },
@@ -322,8 +383,8 @@ export function createDefaultResizeOptions(asset?: ImageAsset): ResizeOptions {
     height: asset?.height ?? 800,
     lockAspectRatio: true,
     fitMode: "contain",
-    mimeType: "image/webp",
-    quality: 0.82,
+    mimeType: getDefaultOutputMime(asset),
+    quality: 0.92,
   };
 }
 
@@ -332,6 +393,13 @@ export function createDefaultCompressOptions(): CompressOptions {
     mimeType: "image/webp",
     quality: 0.72,
     maxDimension: 2400,
+  };
+}
+
+export function createDefaultRemoveBackgroundOptions(): RemoveBackgroundOptions {
+  return {
+    outputMimeType: "image/png",
+    mode: "auto",
   };
 }
 

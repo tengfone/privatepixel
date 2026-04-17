@@ -8,6 +8,7 @@ import {
   normalizeCropOptions,
 } from "../image/options";
 import createPica from "pica";
+import { loadLocalBackgroundRemovalRuntime } from "../features/background-removal/localBackgroundRemoval";
 import type {
   ImageJobFailure,
   ImageJobProgress,
@@ -125,6 +126,20 @@ function rgbaToCanvas(
     0,
     0,
   );
+  return canvas;
+}
+
+function bitmapToImageData(bitmap: ImageBitmap): ImageData {
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const context = getContext(canvas);
+  context.drawImage(bitmap, 0, 0);
+  return context.getImageData(0, 0, bitmap.width, bitmap.height);
+}
+
+function imageDataToCanvas(image: ImageData): OffscreenCanvas {
+  const canvas = new OffscreenCanvas(image.width, image.height);
+  const context = getContext(canvas);
+  context.putImageData(image, 0, 0);
   return canvas;
 }
 
@@ -366,11 +381,38 @@ async function processCrop(
   };
 }
 
-async function processRemoveBackground(): Promise<never> {
-  await import("../features/background-removal/localBackgroundRemoval");
-  throw new Error(
-    "Local background removal model assets are not bundled yet. The runtime is intentionally lazy-loaded.",
-  );
+export async function processRemoveBackground(
+  request: ImageJobRequest,
+  bitmap: ImageBitmap,
+): Promise<{ blob: Blob; width: number; height: number; mimeType: OutputMimeType }> {
+  if (request.operation.type !== "remove-background") {
+    throw new Error("Invalid background removal operation.");
+  }
+
+  postProgress(request, 24, "Preparing transparent cutout");
+  const source = bitmapToImageData(bitmap);
+  cancellationRegistry.throwIfCanceled(request.jobId);
+
+  const runtime = await loadLocalBackgroundRemovalRuntime();
+  cancellationRegistry.throwIfCanceled(request.jobId);
+
+  const image = await runtime.removeBackground(source, {
+    mode: request.operation.options.mode,
+    onProgress: (progress, message) => postProgress(request, progress, message),
+    throwIfCanceled: () => cancellationRegistry.throwIfCanceled(request.jobId),
+  });
+  cancellationRegistry.throwIfCanceled(request.jobId);
+
+  postProgress(request, 92, "Encoding transparent PNG");
+  const canvas = imageDataToCanvas(image);
+  cancellationRegistry.throwIfCanceled(request.jobId);
+
+  return {
+    blob: await encodeCanvas(canvas, request.operation.options.outputMimeType, 1),
+    width: image.width,
+    height: image.height,
+    mimeType: request.operation.options.outputMimeType,
+  };
 }
 
 async function processRequest(request: ImageJobRequest): Promise<void> {
@@ -396,7 +438,7 @@ async function processRequest(request: ImageJobRequest): Promise<void> {
             ? await processConvert(request, bitmap)
             : request.operation.type === "crop"
               ? await processCrop(request, bitmap)
-              : await processRemoveBackground();
+              : await processRemoveBackground(request, bitmap);
 
     cancellationRegistry.throwIfCanceled(request.jobId);
 

@@ -14,6 +14,8 @@ export type OutputMimeType =
 
 export type ResizeFitMode = "contain" | "cover" | "stretch";
 
+export type RemoveBackgroundMode = "auto" | "portrait" | "general" | "best";
+
 export interface ImageAsset {
   id: string;
   file: File;
@@ -64,6 +66,7 @@ export interface CropOptions {
 
 export interface RemoveBackgroundOptions {
   outputMimeType: "image/png";
+  mode: RemoveBackgroundMode;
 }
 
 export type ImageOperation =
