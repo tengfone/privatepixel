@@ -3,6 +3,7 @@ export type ImageTool =
   | "compress"
   | "convert"
   | "crop"
+  | "metadata"
   | "remove-background";
 
 export type OutputMimeType =
@@ -31,6 +32,8 @@ export interface ImageJobSource {
   name: string;
   mimeType: string;
   size: number;
+  width: number;
+  height: number;
   buffer: ArrayBuffer;
 }
 
@@ -69,11 +72,31 @@ export interface RemoveBackgroundOptions {
   mode: RemoveBackgroundMode;
 }
 
+export type MetadataMode = "clean" | "edit";
+
+export interface MetadataTextFields {
+  title: string;
+  description: string;
+  creator: string;
+  copyright: string;
+  keywords: string;
+}
+
+export interface MetadataOptions {
+  mode: MetadataMode;
+  fields: MetadataTextFields;
+  removePrivateData: boolean;
+  removeComments: boolean;
+  preserveColorProfile: boolean;
+  sanitizeSvg: boolean;
+}
+
 export type ImageOperation =
   | { type: "resize"; options: ResizeOptions }
   | { type: "compress"; options: CompressOptions }
   | { type: "convert"; options: ConvertOptions }
   | { type: "crop"; options: CropOptions }
+  | { type: "metadata"; options: MetadataOptions }
   | { type: "remove-background"; options: RemoveBackgroundOptions };
 
 export interface ImageJobRequest {

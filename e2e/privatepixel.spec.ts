@@ -41,9 +41,51 @@ test("imports an image and produces a resize result", async ({ page }) => {
   await expect(page.getByText(/Ready to download/)).toBeVisible();
 
   await page.getByRole("button", { name: /Compress/ }).click();
-  await expect(page.locator(".preview-stage img").first()).toBeVisible();
+  await expect(page.locator(".preview-canvas").first()).toBeVisible();
   const compressStageHeight = await page
     .locator(".editor-stage")
     .evaluate((element) => element.getBoundingClientRect().height);
   expect(compressStageHeight).toBeLessThanOrEqual(800);
+
+  const zoomOutButton = page.locator(".preview-zoom-tools button").first();
+  await zoomOutButton.click();
+  await zoomOutButton.click();
+  const imageFit = await page
+    .locator(".preview-stage img")
+    .first()
+    .evaluate((image) => {
+      const imageBox = image.getBoundingClientRect();
+      const figureBox = image.closest("figure")?.getBoundingClientRect();
+      return {
+        fits:
+          Boolean(figureBox) &&
+          imageBox.left >= figureBox!.left - 1 &&
+          imageBox.right <= figureBox!.right + 1 &&
+          imageBox.top >= figureBox!.top - 1 &&
+          imageBox.bottom <= figureBox!.bottom + 1,
+      };
+    });
+  expect(imageFit.fits).toBe(true);
+
+  const previewCanvas = page.locator(".preview-canvas").first();
+  const beforePan = await previewCanvas.evaluate(
+    (element) => getComputedStyle(element).transform,
+  );
+  const figureBox = await page.locator(".preview-stage figure").first().boundingBox();
+  expect(figureBox).not.toBeNull();
+  await page.mouse.move(figureBox!.x + figureBox!.width / 2, figureBox!.y + 120);
+  await page.mouse.down();
+  await page.mouse.move(figureBox!.x + figureBox!.width / 2 + 48, figureBox!.y + 148);
+  await page.mouse.up();
+  const afterPan = await previewCanvas.evaluate(
+    (element) => getComputedStyle(element).transform,
+  );
+  expect(afterPan).not.toBe(beforePan);
+
+  await page.getByRole("button", { name: /Metadata/ }).click();
+  await expect(page.getByText("Format-aware metadata")).toBeVisible();
+  await page.getByLabel("Metadata mode").selectOption("edit");
+  await page.getByRole("textbox", { name: "Title" }).fill("Local test image");
+  await page.getByRole("button", { name: "Run Metadata" }).click();
+  await expect(page.getByText(/Ready to download/)).toBeVisible();
 });

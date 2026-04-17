@@ -62,7 +62,10 @@ type RawImageConstructor = {
 };
 
 interface BackgroundRemovalRuntimeDependencies {
-  detectFace: (source: ImageData) => Promise<boolean>;
+  detectFace: (
+    source: ImageData,
+    onProgress?: LocalBackgroundRemovalProgress,
+  ) => Promise<boolean>;
   runModel: (
     source: ImageData,
     model: BackgroundRemovalModel,
@@ -77,13 +80,29 @@ const MODEL_IDS: Record<BackgroundRemovalModel, string> = {
 
 const MODEL_LABELS: Record<BackgroundRemovalModel, string> = {
   modnet: "MODNet",
-  rmbg: "RMBG",
+  rmbg: "RMBG-1.4",
+};
+
+const MODEL_DESCRIPTIONS: Record<BackgroundRemovalModel, string> = {
+  modnet: "MODNet portrait model",
+  rmbg: "RMBG-1.4 general model",
 };
 
 const MODEL_LOAD_PROGRESS: Record<BackgroundRemovalModel, number> = {
   modnet: 42,
   rmbg: 44,
 };
+
+function modelLoadProgress(
+  modelKey: BackgroundRemovalModel,
+  device: DeviceType,
+): number {
+  if (modelKey === "rmbg" && device === "wasm") {
+    return 46;
+  }
+
+  return MODEL_LOAD_PROGRESS[modelKey];
+}
 
 interface MediaPipeModuleWorkerGlobal {
   import?: (url: string) => Promise<unknown>;
@@ -172,14 +191,18 @@ async function loadBackgroundModelOnDevice(
   const cacheKey = `${modelKey}:${device}`;
   const cached = modelPromises.get(cacheKey);
   if (cached) {
+    onProgress?.(
+      modelLoadProgress(modelKey, device),
+      `Using cached local ${MODEL_DESCRIPTIONS[modelKey]}`,
+    );
     return cached;
   }
 
   const promise = (async () => {
     const transformers = await loadTransformers();
     onProgress?.(
-      MODEL_LOAD_PROGRESS[modelKey],
-      `Loading ${MODEL_LABELS[modelKey]} locally`,
+      modelLoadProgress(modelKey, device),
+      `Loading ${MODEL_DESCRIPTIONS[modelKey]} locally`,
     );
     const [model, processor] = await Promise.all([
       transformers.AutoModel.from_pretrained(MODEL_IDS[modelKey], {
@@ -209,13 +232,21 @@ async function loadBackgroundModel(
   modelKey: BackgroundRemovalModel,
   onProgress?: LocalBackgroundRemovalProgress,
 ): Promise<LoadedBackgroundModel> {
-  if (modelKey === "rmbg" && hasWebGpu()) {
-    try {
-      onProgress?.(40, "Trying RMBG with WebGPU");
-      return await loadBackgroundModelOnDevice(modelKey, "webgpu", onProgress);
-    } catch {
-      onProgress?.(45, "WebGPU unavailable; using local WASM");
+  if (modelKey === "rmbg") {
+    if (hasWebGpu()) {
+      try {
+        onProgress?.(40, "Checking WebGPU for RMBG-1.4");
+        return await loadBackgroundModelOnDevice(modelKey, "webgpu", onProgress);
+      } catch {
+        onProgress?.(45, "WebGPU did not start; falling back to slower local WASM");
+      }
+    } else {
+      onProgress?.(40, "Using local WASM for RMBG-1.4; first run can take a bit");
     }
+  }
+
+  if (modelKey === "modnet") {
+    onProgress?.(40, "Using local WASM for MODNet portrait matting");
   }
 
   return loadBackgroundModelOnDevice(modelKey, "wasm", onProgress);
@@ -264,8 +295,13 @@ function imageDataToCanvas(source: ImageData, maxDimension = 384): OffscreenCanv
   return canvas;
 }
 
-async function detectFace(source: ImageData): Promise<boolean> {
+async function detectFace(
+  source: ImageData,
+  onProgress?: LocalBackgroundRemovalProgress,
+): Promise<boolean> {
+  onProgress?.(31, "Loading local face detector");
   const detector = await loadFaceDetector();
+  onProgress?.(33, "Scanning downscaled image for faces");
   const result: FaceDetectorResult = detector.detect(imageDataToCanvas(source));
   return result.detections.length > 0;
 }
@@ -302,6 +338,7 @@ async function runBackgroundModel(
   onProgress?: LocalBackgroundRemovalProgress,
 ): Promise<AlphaMask> {
   const loaded = await loadBackgroundModel(modelKey, onProgress);
+  onProgress?.(50, `Preprocessing image for ${MODEL_DESCRIPTIONS[modelKey]}`);
   const image = new loaded.RawImage(
     new Uint8ClampedArray(source.data),
     source.width,
@@ -319,8 +356,10 @@ async function runBackgroundModel(
   }
 
   onProgress?.(
-    modelKey === "modnet" ? 58 : 56,
-    `Running ${MODEL_LABELS[modelKey]}${loaded.device === "webgpu" ? " on WebGPU" : ""}`,
+    62,
+    `Running ${MODEL_LABELS[modelKey]} with ${
+      loaded.device === "webgpu" ? "WebGPU" : "WASM"
+    }`,
   );
   const output = await loaded.model(inputs);
   const outputName = session?.outputNames[0] ?? Object.keys(output)[0];
@@ -335,6 +374,7 @@ async function runBackgroundModel(
   }
 
   const normalized = tensorNeedsSigmoid(tensor) ? tensor.sigmoid() : tensor;
+  onProgress?.(78, `Refining ${MODEL_LABELS[modelKey]} alpha mask`);
   const mask = await loaded.RawImage.fromTensor(normalized.mul(255).to("uint8")).resize(
     source.width,
     source.height,
@@ -436,39 +476,86 @@ export function chooseBestAlphaMask(first: AlphaMask, second: AlphaMask): AlphaM
   return scoreAlphaMask(second) > scoreAlphaMask(first) + 0.05 ? second : first;
 }
 
+function modelProgressWindow(
+  onProgress: LocalBackgroundRemovalProgress | undefined,
+  start: number,
+  end: number,
+): LocalBackgroundRemovalProgress | undefined {
+  if (!onProgress) {
+    return undefined;
+  }
+
+  return (progress, message) => {
+    const normalized = Math.max(0, Math.min(1, (progress - 40) / 38));
+    onProgress(Math.round(start + normalized * (end - start)), message);
+  };
+}
+
 export function createLocalBackgroundRemovalRuntime({
   detectFace,
   runModel,
 }: BackgroundRemovalRuntimeDependencies): LocalBackgroundRemovalRuntime {
   return {
     async removeBackground(source, { mode, onProgress, throwIfCanceled }) {
-      onProgress?.(28, "Routing image locally");
+      onProgress?.(28, "Choosing local background-removal route");
       throwIfCanceled?.();
       const shouldDetectFace = mode === "auto" || mode === "best";
-      const hasFace = shouldDetectFace ? await detectFace(source) : false;
+      if (shouldDetectFace) {
+        onProgress?.(
+          30,
+          mode === "best"
+            ? "Best result mode: checking faces for the first pass"
+            : "Auto mode: checking faces locally",
+        );
+      } else if (mode === "portrait") {
+        onProgress?.(34, "Advanced mode: portrait model selected");
+      } else {
+        onProgress?.(34, "Advanced mode: general object model selected");
+      }
+
+      const hasFace = shouldDetectFace ? await detectFace(source, onProgress) : false;
       const primaryModel = selectPrimaryModel(mode, hasFace);
       throwIfCanceled?.();
-      onProgress?.(
-        36,
-        primaryModel === "modnet"
-          ? "Using portrait cutout model"
-          : "Using general object cutout model",
-      );
+      if (shouldDetectFace) {
+        onProgress?.(
+          34,
+          hasFace
+            ? "Face detected; starting with the portrait model"
+            : "No face detected; starting with the general object model",
+        );
+      }
+      onProgress?.(36, `Selected ${MODEL_DESCRIPTIONS[primaryModel]}`);
 
-      const primaryMask = await runModel(source, primaryModel, onProgress);
+      if (mode === "best") {
+        onProgress?.(38, "Best result mode: running primary model first");
+      }
+
+      const primaryMask = await runModel(
+        source,
+        primaryModel,
+        mode === "best" ? modelProgressWindow(onProgress, 40, 62) : onProgress,
+      );
       throwIfCanceled?.();
       if (mode !== "best") {
-        onProgress?.(84, "Compositing transparent PNG");
+        onProgress?.(84, "Applying alpha mask to source image");
         throwIfCanceled?.();
         return composeImageWithAlphaMask(source, primaryMask);
       }
 
       const fallbackModel = getFallbackModel(primaryModel);
-      onProgress?.(68, `Trying ${MODEL_LABELS[fallbackModel]} fallback`);
+      onProgress?.(
+        68,
+        `Primary mask done; running ${MODEL_DESCRIPTIONS[fallbackModel]} fallback`,
+      );
       throwIfCanceled?.();
-      const fallbackMask = await runModel(source, fallbackModel, onProgress);
+      const fallbackMask = await runModel(
+        source,
+        fallbackModel,
+        modelProgressWindow(onProgress, 70, 84),
+      );
       throwIfCanceled?.();
-      onProgress?.(86, "Choosing the cleaner cutout");
+      onProgress?.(86, "Comparing masks for cleaner edges");
+      onProgress?.(88, "Applying selected alpha mask to source image");
       return composeImageWithAlphaMask(
         source,
         chooseBestAlphaMask(primaryMask, fallbackMask),

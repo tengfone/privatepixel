@@ -108,7 +108,13 @@ describe("App", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run Remove BG" })).toBeEnabled();
-    expect(screen.getByLabelText("Batch workers")).toBeDisabled();
+    expect(screen.getByLabelText("Batch speed")).toBeDisabled();
+    expect(screen.getByLabelText("Batch speed")).toHaveValue("1");
+    expect(
+      screen.getByText(
+        "Remove BG works on one image at a time to keep local model memory stable.",
+      ),
+    ).toBeInTheDocument();
     expect(workerConstructor).not.toHaveBeenCalled();
   });
 });

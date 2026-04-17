@@ -25,6 +25,7 @@ import {
   calculateRotatedDimensions,
   clampQuality,
   createDefaultCompressOptions,
+  createDefaultMetadataOptions,
   createDefaultRemoveBackgroundOptions,
   createDefaultResizeOptions,
   getDefaultOutputMime,
@@ -33,6 +34,11 @@ import {
   isSupportedInputMime,
   normalizeRotationDegrees,
 } from "../image/options";
+import {
+  canProcessMetadata,
+  getEffectiveMetadataOptions,
+  getMetadataFormatSupport,
+} from "../image/metadata";
 import type {
   CompressOptions,
   ConvertOptions,
@@ -42,6 +48,7 @@ import type {
   ImageJobRequest,
   ImageOperation,
   ImageTool,
+  MetadataOptions,
   OutputMimeType,
   ProcessedImageResult,
   RemoveBackgroundMode,
@@ -54,6 +61,7 @@ import { ImageWorkerClient } from "../workers/imageClient";
 type JobStatus = "idle" | "queued" | "processing" | "done" | "error";
 type CropAspect = "original" | "1:1" | "4:3" | "16:9";
 type ResizeHandle = "width" | "height" | "both";
+type AvailableImageTool = ImageTool;
 
 interface AssetJobView {
   status: JobStatus;
@@ -91,19 +99,21 @@ interface CropPercentOptions {
   quality: number;
 }
 
-const TOOL_LABELS: Record<ImageTool, string> = {
+const TOOL_LABELS: Record<AvailableImageTool, string> = {
   resize: "Resize",
   compress: "Compress",
   convert: "Convert",
   crop: "Crop",
+  metadata: "Metadata",
   "remove-background": "Remove BG",
 };
 
-const TOOL_COPY: Record<ImageTool, string> = {
+const TOOL_COPY: Record<AvailableImageTool, string> = {
   resize: "Drag the frame, zoom the canvas, or set exact output dimensions.",
   compress: "Make a smaller file with local browser encoding.",
   convert: "Choose a target image format.",
   crop: "Drag, zoom, rotate, and export the selected area.",
+  metadata: "Inspect, clean, and edit metadata without uploading the file.",
   "remove-background": "Create a transparent PNG with local background removal.",
 };
 
@@ -218,7 +228,7 @@ export function App() {
   const [assets, setAssets] = useState<ImageAsset[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Record<string, AssetJobView>>({});
-  const [activeTool, setActiveTool] = useState<ImageTool>("resize");
+  const [activeTool, setActiveTool] = useState<AvailableImageTool>("resize");
   const [resizeOptions, setResizeOptions] = useState<ResizeOptions>(
     createDefaultResizeOptions(),
   );
@@ -229,6 +239,9 @@ export function App() {
     useState<ConvertOptions>(createConvertOptions());
   const [removeBackgroundOptions, setRemoveBackgroundOptions] =
     useState<RemoveBackgroundOptions>(createDefaultRemoveBackgroundOptions());
+  const [metadataOptions, setMetadataOptions] = useState<MetadataOptions>(
+    createDefaultMetadataOptions(),
+  );
   const [cropAspect, setCropAspect] = useState<CropAspect>("original");
   const [cropPercent, setCropPercent] = useState(createCropPercentOptions);
   const [cropPosition, setCropPosition] = useState<Point>({ x: 0, y: 0 });
@@ -259,6 +272,13 @@ export function App() {
         .filter((result): result is ProcessedImageResult => Boolean(result)),
     [assets, jobs],
   );
+  const activeToolCannotRun =
+    activeTool === "metadata" && selectedAsset
+      ? !canProcessMetadata(
+          selectedAsset.mimeType,
+          getEffectiveMetadataOptions(selectedAsset.mimeType, metadataOptions),
+        )
+      : false;
 
   const sizePreviewKey = useMemo(
     () =>
@@ -269,6 +289,7 @@ export function App() {
             compressOptions,
             convertOptions,
             cropPercent,
+            metadataOptions,
             resizeOptions,
           })
         : "empty",
@@ -277,6 +298,7 @@ export function App() {
       compressOptions,
       convertOptions,
       cropPercent,
+      metadataOptions,
       resizeOptions,
       selectedAsset,
     ],
@@ -290,7 +312,21 @@ export function App() {
     if (activeTool === "remove-background") {
       return {
         status: "idle",
-        message: "Run Remove BG to create a transparent PNG. Models load only when needed.",
+        message:
+          "Run Remove BG to create a transparent PNG. Models load only when needed.",
+      };
+    }
+
+    if (
+      activeTool === "metadata" &&
+      !canProcessMetadata(
+        selectedAsset.mimeType,
+        getEffectiveMetadataOptions(selectedAsset.mimeType, metadataOptions),
+      )
+    ) {
+      return {
+        status: "idle",
+        message: "Metadata writing is not available for this format yet.",
       };
     }
 
@@ -310,7 +346,14 @@ export function App() {
     }
 
     return sizePreview;
-  }, [activeTool, isProcessing, selectedAsset, sizePreview, sizePreviewKey]);
+  }, [
+    activeTool,
+    isProcessing,
+    metadataOptions,
+    selectedAsset,
+    sizePreview,
+    sizePreviewKey,
+  ]);
 
   useEffect(() => {
     const activeJobIds = activeJobIdsRef.current;
@@ -485,6 +528,13 @@ export function App() {
         return { type: "crop", options: buildCropFromPercent(asset, cropPercent) };
       }
 
+      if (activeTool === "metadata") {
+        return {
+          type: "metadata",
+          options: getEffectiveMetadataOptions(asset.mimeType, metadataOptions),
+        };
+      }
+
       return {
         type: "remove-background",
         options: removeBackgroundOptions,
@@ -495,13 +545,23 @@ export function App() {
       compressOptions,
       convertOptions,
       cropPercent,
+      metadataOptions,
       removeBackgroundOptions,
       resizeOptions,
     ],
   );
 
   useEffect(() => {
-    if (!selectedAsset || activeTool === "remove-background" || isProcessing) {
+    if (
+      !selectedAsset ||
+      activeTool === "remove-background" ||
+      (activeTool === "metadata" &&
+        !canProcessMetadata(
+          selectedAsset.mimeType,
+          getEffectiveMetadataOptions(selectedAsset.mimeType, metadataOptions),
+        )) ||
+      isProcessing
+    ) {
       return;
     }
 
@@ -530,6 +590,8 @@ export function App() {
               name: selectedAsset.name,
               mimeType: selectedAsset.mimeType,
               size: selectedAsset.size,
+              width: selectedAsset.width,
+              height: selectedAsset.height,
               buffer,
             },
             operation: buildOperation(selectedAsset),
@@ -597,6 +659,7 @@ export function App() {
     getWorker,
     buildOperation,
     isProcessing,
+    metadataOptions,
     selectedAsset,
     sizePreviewKey,
   ]);
@@ -628,6 +691,8 @@ export function App() {
           name: asset.name,
           mimeType: asset.mimeType,
           size: asset.size,
+          width: asset.width,
+          height: asset.height,
           buffer,
         },
         operation: buildOperation(asset),
@@ -761,7 +826,11 @@ export function App() {
     <main className="app-shell">
       <header className="site-header" aria-label="Primary navigation">
         <a className="site-mark" href="#app">
-          <img src="/assets/private_pixel.png" alt="PrivatePixel" height={28} />
+          <img
+            src={`${import.meta.env.BASE_URL}assets/private_pixel.png`}
+            alt="PrivatePixel"
+            height={28}
+          />
           PrivatePixel
         </a>
         <nav className="site-nav" aria-label="Sections">
@@ -806,7 +875,7 @@ export function App() {
           <input
             data-testid="file-input"
             type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif,image/svg+xml"
             multiple
             onChange={handleFileInput}
           />
@@ -816,7 +885,7 @@ export function App() {
       <section className="workbench" aria-label="PrivatePixel workspace">
         <aside className="tool-rail" aria-label="Tool selection">
           <p className="eyebrow">03. Method</p>
-          {(Object.keys(TOOL_LABELS) as ImageTool[]).map((tool, index) => (
+          {(Object.keys(TOOL_LABELS) as AvailableImageTool[]).map((tool, index) => (
             <button
               key={tool}
               className={tool === activeTool ? "active" : ""}
@@ -922,6 +991,14 @@ export function App() {
             />
           ) : null}
 
+          {activeTool === "metadata" ? (
+            <MetadataControls
+              asset={selectedAsset}
+              options={metadataOptions}
+              onChange={setMetadataOptions}
+            />
+          ) : null}
+
           {activeTool === "remove-background" ? (
             <RemoveBackgroundControls
               options={removeBackgroundOptions}
@@ -933,20 +1010,26 @@ export function App() {
 
           <div className="runbar">
             <label>
-              Batch workers
+              Batch speed
               <select
-                value={concurrency}
+                value={activeTool === "remove-background" ? 1 : concurrency}
                 disabled={activeTool === "remove-background"}
+                aria-describedby="batch-speed-note"
                 onChange={(event) => setConcurrency(Number(event.target.value))}
               >
-                <option value={1}>1</option>
-                <option value={2}>2</option>
+                <option value={1}>Safer</option>
+                <option value={2}>Faster</option>
               </select>
             </label>
+            <p id="batch-speed-note" className="runbar-note">
+              {activeTool === "remove-background"
+                ? "Remove BG works on one image at a time to keep local model memory stable."
+                : "Faster works on two images at once. Safer works on one."}
+            </p>
             <button
               type="button"
               onClick={() => void processBatch()}
-              disabled={isProcessing || !assets.length}
+              disabled={isProcessing || !assets.length || activeToolCannotRun}
               data-testid="run-tool"
             >
               Run {TOOL_LABELS[activeTool]}
@@ -1026,18 +1109,32 @@ export function App() {
           <p className="eyebrow">07. About</p>
           <h2 id="about-title">Private image work, kept local.</h2>
         </div>
-        <p>
-          Resize, compress, convert, crop, and export images in this browser. Source
-          files stay in memory on this device; no server processing, accounts, paywalls,
-          or watermarks.
-        </p>
+        <div className="about-copy">
+          <p>
+            Resize, compress, convert, crop, and export images in this browser. Source
+            files stay in memory on this device; no server processing, accounts,
+            paywalls, or watermarks.
+          </p>
+          <div className="about-links" aria-label="Project links">
+            <a
+              href="https://github.com/tengfone/privatepixel"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Original on GitHub
+            </a>
+            <a href="https://tengfone.dev" target="_blank" rel="noreferrer">
+              Made with love - tengfone.dev
+            </a>
+          </div>
+        </div>
       </section>
     </main>
   );
 }
 
 interface EditorStageProps {
-  activeTool: ImageTool;
+  activeTool: AvailableImageTool;
   asset: ImageAsset;
   job: AssetJobView;
   resizeOptions: ResizeOptions;
@@ -1116,6 +1213,7 @@ function EditorStage({
 
   return (
     <PreviewStage
+      key={`${asset.id}-${result?.url ?? "source"}`}
       asset={asset}
       result={result}
       viewZoom={previewViewZoom}
@@ -1137,8 +1235,81 @@ function PreviewStage({
   viewZoom,
   onViewZoomChange,
 }: PreviewStageProps) {
+  const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const dragStartRef = useRef<{
+    pointerId: number;
+    origin: Point;
+    pan: Point;
+  } | null>(null);
+
   function changeViewZoom(nextZoom: number): void {
     onViewZoomChange(clampValue(nextZoom, 0.5, 3));
+  }
+
+  function resetView(): void {
+    setPan({ x: 0, y: 0 });
+    onViewZoomChange(1);
+  }
+
+  function startPan(event: PointerEvent<HTMLElement>): void {
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragStartRef.current = {
+      pointerId: event.pointerId,
+      origin: { x: event.clientX, y: event.clientY },
+      pan,
+    };
+    setIsPanning(true);
+  }
+
+  function updatePan(event: PointerEvent<HTMLElement>): void {
+    const dragStart = dragStartRef.current;
+    if (!dragStart || dragStart.pointerId !== event.pointerId) {
+      return;
+    }
+
+    setPan({
+      x: dragStart.pan.x + event.clientX - dragStart.origin.x,
+      y: dragStart.pan.y + event.clientY - dragStart.origin.y,
+    });
+  }
+
+  function endPan(event: PointerEvent<HTMLElement>): void {
+    const dragStart = dragStartRef.current;
+    if (!dragStart || dragStart.pointerId !== event.pointerId) {
+      return;
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragStartRef.current = null;
+    setIsPanning(false);
+  }
+
+  function renderPreviewFigure(src: string, alt: string) {
+    return (
+      <figure
+        className={isPanning ? "is-panning" : undefined}
+        onPointerDown={startPan}
+        onPointerMove={updatePan}
+        onPointerUp={endPan}
+        onPointerCancel={endPan}
+      >
+        <div
+          className={`preview-canvas ${isPanning ? "is-panning" : ""}`}
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${viewZoom})`,
+          }}
+        >
+          <img src={src} alt={alt} />
+        </div>
+      </figure>
+    );
   }
 
   return (
@@ -1151,7 +1322,10 @@ function PreviewStage({
         changeViewZoom(viewZoom + (event.deltaY > 0 ? -0.1 : 0.1));
       }}
     >
-      <div className="resize-zoom-tools" aria-label="Preview zoom controls">
+      <div
+        className="resize-zoom-tools preview-zoom-tools"
+        aria-label="Preview zoom controls"
+      >
         <button type="button" onClick={() => changeViewZoom(viewZoom - 0.25)}>
           -
         </button>
@@ -1159,23 +1333,12 @@ function PreviewStage({
         <button type="button" onClick={() => changeViewZoom(viewZoom + 0.25)}>
           +
         </button>
+        <button type="button" onClick={resetView}>
+          Fit
+        </button>
       </div>
-      <figure>
-        <img
-          src={asset.previewUrl}
-          alt={`Selected ${asset.name}`}
-          style={{ transform: `scale(${viewZoom})` }}
-        />
-      </figure>
-      {result ? (
-        <figure>
-          <img
-            src={result.url}
-            alt={`Processed ${asset.name}`}
-            style={{ transform: `scale(${viewZoom})` }}
-          />
-        </figure>
-      ) : null}
+      {renderPreviewFigure(asset.previewUrl, `Selected ${asset.name}`)}
+      {result ? renderPreviewFigure(result.url, `Processed ${asset.name}`) : null}
       <StageMeta asset={asset} result={result} />
     </div>
   );
@@ -1689,9 +1852,7 @@ function RemoveBackgroundControls({
       <div className="runtime-note runtime-note-ready">
         <p className="eyebrow">Local only</p>
         <h3>Transparent PNG</h3>
-        <p>
-          Auto chooses MODNet for portraits and RMBG-1.4 for general objects.
-        </p>
+        <p>Auto chooses MODNet for portraits and RMBG-1.4 for general objects.</p>
       </div>
       <details className="advanced-panel">
         <summary>Advanced</summary>
@@ -1717,6 +1878,154 @@ function RemoveBackgroundControls({
         </label>
         <p>{selectedCopy.detail}</p>
       </details>
+    </div>
+  );
+}
+
+interface MetadataControlsProps {
+  asset?: ImageAsset;
+  options: MetadataOptions;
+  onChange: (options: MetadataOptions) => void;
+}
+
+function MetadataControls({ asset, options, onChange }: MetadataControlsProps) {
+  const support = getMetadataFormatSupport(asset?.mimeType ?? "");
+  const effectiveOptions = asset
+    ? getEffectiveMetadataOptions(asset.mimeType, options)
+    : options;
+  const canWrite = support.canClean || support.canEditText;
+
+  function updateField(field: keyof MetadataOptions["fields"], value: string): void {
+    onChange({
+      ...options,
+      fields: {
+        ...options.fields,
+        [field]: value,
+      },
+    });
+  }
+
+  return (
+    <div className="control-stack">
+      <div className="runtime-note runtime-note-ready">
+        <p className="eyebrow">{support.label}</p>
+        <h3>{canWrite ? "Format-aware metadata" : "Inspect only"}</h3>
+        <p>{support.summary}</p>
+      </div>
+
+      {canWrite ? (
+        <>
+          <label>
+            Metadata mode
+            <select
+              value={effectiveOptions.mode}
+              onChange={(event) =>
+                onChange({
+                  ...options,
+                  mode: event.target.value as MetadataOptions["mode"],
+                })
+              }
+            >
+              <option value="clean" disabled={!support.canClean}>
+                Clean private data
+              </option>
+              <option value="edit" disabled={!support.canEditText}>
+                Edit public text
+              </option>
+            </select>
+          </label>
+
+          <div className="metadata-switches">
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={effectiveOptions.removePrivateData}
+                disabled={!support.canStripPrivateData}
+                onChange={(event) =>
+                  onChange({
+                    ...options,
+                    removePrivateData: event.target.checked,
+                  })
+                }
+              />
+              Remove EXIF / GPS / private data
+            </label>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={effectiveOptions.removeComments}
+                disabled={!support.canStripComments}
+                onChange={(event) =>
+                  onChange({
+                    ...options,
+                    removeComments: event.target.checked,
+                  })
+                }
+              />
+              Remove comments / text chunks
+            </label>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={effectiveOptions.preserveColorProfile}
+                disabled={!support.canPreserveColorProfile}
+                onChange={(event) =>
+                  onChange({
+                    ...options,
+                    preserveColorProfile: event.target.checked,
+                  })
+                }
+              />
+              Preserve color profile
+            </label>
+            {support.canSanitizeSvg ? (
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={effectiveOptions.sanitizeSvg}
+                  onChange={(event) =>
+                    onChange({
+                      ...options,
+                      sanitizeSvg: event.target.checked,
+                    })
+                  }
+                />
+                Sanitize SVG scripts and external refs
+              </label>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+
+      {support.canEditText && effectiveOptions.mode === "edit" ? (
+        <div className="metadata-fields">
+          <TextField
+            label="Title"
+            value={options.fields.title}
+            onChange={(value) => updateField("title", value)}
+          />
+          <TextField
+            label="Description"
+            value={options.fields.description}
+            onChange={(value) => updateField("description", value)}
+          />
+          <TextField
+            label="Creator"
+            value={options.fields.creator}
+            onChange={(value) => updateField("creator", value)}
+          />
+          <TextField
+            label="Copyright"
+            value={options.fields.copyright}
+            onChange={(value) => updateField("copyright", value)}
+          />
+          <TextField
+            label="Keywords"
+            value={options.fields.keywords}
+            onChange={(value) => updateField("keywords", value)}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1767,6 +2076,25 @@ interface NumberFieldProps {
   min: number;
   max?: number;
   onChange: (value: number) => void;
+}
+
+interface TextFieldProps {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}
+
+function TextField({ label, value, onChange }: TextFieldProps) {
+  return (
+    <label>
+      {label}
+      <input
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
 }
 
 function NumberField({ label, value, min, max, onChange }: NumberFieldProps) {

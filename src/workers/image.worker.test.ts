@@ -85,6 +85,8 @@ describe("image worker background removal", () => {
         name: "shoe.png",
         mimeType: "image/png",
         size: 2,
+        width: 2,
+        height: 1,
         buffer: new ArrayBuffer(2),
       },
       operation: {
@@ -110,7 +112,14 @@ describe("image worker background removal", () => {
       expect.objectContaining({
         type: "progress",
         progress: 24,
-        message: "Preparing transparent cutout",
+        message: "Preparing image pixels for local background removal",
+      }),
+    );
+    expect(self.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "progress",
+        progress: 26,
+        message: "Starting background-removal runtime",
       }),
     );
     expect(self.postMessage).toHaveBeenCalledWith(
@@ -124,7 +133,7 @@ describe("image worker background removal", () => {
       expect.objectContaining({
         type: "progress",
         progress: 92,
-        message: "Encoding transparent PNG",
+        message: "Encoding transparent PNG locally",
       }),
     );
   });

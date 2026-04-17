@@ -3,6 +3,7 @@ import type {
   CropOptions,
   ImageAsset,
   ImageTool,
+  MetadataOptions,
   OutputMimeType,
   RemoveBackgroundOptions,
   ResizeFitMode,
@@ -32,6 +33,7 @@ export const SUPPORTED_INPUT_MIME_TYPES = new Set([
   "image/gif",
   "image/bmp",
   "image/avif",
+  "image/svg+xml",
 ]);
 
 export const OUTPUT_MIME_TYPES = Object.keys(MIME_EXTENSIONS) as OutputMimeType[];
@@ -400,6 +402,23 @@ export function createDefaultRemoveBackgroundOptions(): RemoveBackgroundOptions 
   return {
     outputMimeType: "image/png",
     mode: "auto",
+  };
+}
+
+export function createDefaultMetadataOptions(): MetadataOptions {
+  return {
+    mode: "clean",
+    fields: {
+      title: "",
+      description: "",
+      creator: "",
+      copyright: "",
+      keywords: "",
+    },
+    removePrivateData: true,
+    removeComments: true,
+    preserveColorProfile: true,
+    sanitizeSvg: true,
   };
 }
 

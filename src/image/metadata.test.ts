@@ -1,0 +1,128 @@
+import { describe, expect, it } from "vitest";
+import { createDefaultMetadataOptions } from "./options";
+import {
+  getEffectiveMetadataOptions,
+  getMetadataFormatSupport,
+  processMetadataSource,
+} from "./metadata";
+
+const SAMPLE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAJElEQVR4AVzFgQkAAAgCwc/9d7YoIujgVV5gV+IREXQMzd0mAAAA//+U28WrAAAABklEQVQDANlSDAFZtBg5AAAAAElFTkSuQmCC";
+
+async function readBlobArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  if (typeof blob.arrayBuffer === "function") {
+    return blob.arrayBuffer();
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+async function readBlobText(blob: Blob): Promise<string> {
+  if (typeof blob.text === "function") {
+    return blob.text();
+  }
+
+  return new TextDecoder().decode(await readBlobArrayBuffer(blob));
+}
+
+describe("metadata helpers", () => {
+  it("reports format-specific metadata support", () => {
+    expect(getMetadataFormatSupport("image/jpeg")).toMatchObject({
+      canClean: true,
+      canEditText: true,
+      canStripPrivateData: true,
+    });
+    expect(getMetadataFormatSupport("image/webp")).toMatchObject({
+      canClean: true,
+      canEditText: false,
+    });
+    expect(getMetadataFormatSupport("image/avif")).toMatchObject({
+      canClean: false,
+      canEditText: false,
+    });
+  });
+
+  it("downgrades unsupported edit mode to clean mode", () => {
+    expect(
+      getEffectiveMetadataOptions("image/webp", {
+        ...createDefaultMetadataOptions(),
+        mode: "edit",
+      }).mode,
+    ).toBe("clean");
+  });
+
+  it("adds PNG text metadata without re-encoding pixels", async () => {
+    const buffer = Uint8Array.from(Buffer.from(SAMPLE_PNG_BASE64, "base64")).buffer;
+    const result = await processMetadataSource(
+      {
+        name: "sample.png",
+        mimeType: "image/png",
+        size: buffer.byteLength,
+        width: 4,
+        height: 4,
+        buffer,
+      },
+      {
+        ...createDefaultMetadataOptions(),
+        mode: "edit",
+        fields: {
+          title: "Private sample",
+          description: "",
+          creator: "PrivatePixel",
+          copyright: "",
+          keywords: "local,private",
+        },
+      },
+    );
+
+    const bytes = new Uint8Array(await readBlobArrayBuffer(result.blob));
+    const text = String.fromCharCode(...bytes);
+
+    expect(result.mimeType).toBe("image/png");
+    expect(result.width).toBe(4);
+    expect(text).toContain("Title");
+    expect(text).toContain("Private sample");
+    expect(text).toContain("PrivatePixel");
+  });
+
+  it("edits and sanitizes SVG metadata", async () => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><script>alert(1)</script><!-- editor --><rect width="10" height="10" onclick="alert(1)"/></svg>`;
+    const buffer = new TextEncoder().encode(svg).buffer;
+    const result = await processMetadataSource(
+      {
+        name: "icon.svg",
+        mimeType: "image/svg+xml",
+        size: buffer.byteLength,
+        width: 10,
+        height: 10,
+        buffer,
+      },
+      {
+        ...createDefaultMetadataOptions(),
+        mode: "edit",
+        fields: {
+          title: "Safe icon",
+          description: "A sanitized SVG",
+          creator: "PrivatePixel",
+          copyright: "",
+          keywords: "",
+        },
+      },
+    );
+
+    const text = await readBlobText(result.blob);
+
+    expect(result.mimeType).toBe("image/svg+xml");
+    expect(text).toContain("<title>Safe icon</title>");
+    expect(text).toContain("<desc>A sanitized SVG</desc>");
+    expect(text).toContain("PrivatePixel");
+    expect(text).not.toContain("<script");
+    expect(text).not.toContain("onclick");
+    expect(text).not.toContain("editor");
+  });
+});

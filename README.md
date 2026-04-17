@@ -32,6 +32,8 @@ Workers, and narrow WASM-ready processing boundaries.
 - Convert tool with target format and high-quality local browser encoding.
 - Crop tool powered by an interactive cropper with zoom, aspect presets, rotation,
   and output format controls.
+- Metadata tool with format-aware inspect, clean, and edit behavior for image
+  containers that can be safely rewritten locally.
 - Remove BG tool with local-only model routing, transparent PNG output, and an
   Advanced model selector.
 - Centered preview stage with zoom controls for preview, compress, convert, and
@@ -39,7 +41,7 @@ Workers, and narrow WASM-ready processing boundaries.
 - Live output size preview that locally encodes the selected image after option
   changes and shows output bytes, percentage change, dimensions, format, and encode
   time.
-- Batch processing with a small worker concurrency limit to reduce memory spikes.
+- Batch speed control that balances faster processing with stable browser memory.
 - Result download per image, plus download-all for completed results.
 - GitHub Pages deployment workflow.
 
@@ -69,22 +71,31 @@ but it does not vectorize the image.
 Browser support still matters. If the current browser cannot encode a selected
 format, PrivatePixel reports that failure instead of sending the image elsewhere.
 
+## Metadata
+
+The Metadata method is format-aware instead of pretending every image container has
+the same metadata model.
+
+- JPEG: clean EXIF/GPS/XMP/IPTC/comment metadata, preserve or strip ICC profiles,
+  and write basic public text metadata as a JPEG comment.
+- PNG: clean text chunks and EXIF chunks, preserve or strip color chunks, and write
+  public text fields as PNG `tEXt` chunks.
+- WebP: clean EXIF/XMP/ICC chunks. Public text editing is not enabled for WebP yet.
+- SVG: edit `<title>` and `<desc>`, replace simple public metadata, remove comments,
+  and sanitize scripts, event handlers, and external references.
+- AVIF/GIF/BMP: inspect-only or basic file info until reliable local writers are
+  added.
+
+Metadata jobs rewrite the image container directly where supported, so pixels are
+not re-encoded for metadata-only edits.
+
 ## Resize Presets
 
 The resize tool includes common target sizes:
 
 - Slack profile: `1024 x 1024`
 - YouTube thumbnail: `1280 x 720`
-- Instagram portrait: `1080 x 1350`
-- Story / TikTok: `1080 x 1920`
-- Instagram square: `1080 x 1080`
-- Instagram wide: `1080 x 566`
-- YouTube banner: `2560 x 1440`
-- LinkedIn post: `1200 x 627`
-- X post: `1600 x 900`
-- X header: `1500 x 500`
-- Facebook link: `1200 x 630`
-- Pinterest pin: `1000 x 1500`
+- And more ...
 
 Presets use `cover` mode so the output matches the exact requested dimensions with
 a centered local crop. Use `contain` when preserving the full source image is more
@@ -120,9 +131,9 @@ Bundled local asset paths include:
 
 Transformers.js is configured for local-only model loading. RMBG-1.4 attempts
 WebGPU first when available and falls back to WASM; MODNet currently uses WASM.
-Remove BG batch processing is limited to one job at a time to avoid duplicate
-large model loads and memory spikes. The app does not call a remote
-image-processing or inference API as a fallback.
+Remove BG works on one image at a time to avoid duplicate large model loads and
+browser memory spikes. The app does not call a remote image-processing or
+inference API as a fallback.
 
 ## Stack
 
@@ -269,6 +280,3 @@ PrivatePixel is built so basic image editing stays local:
 - Results are returned as local blobs.
 - Downloads are initiated from the browser session.
 - Background removal does not fall back to remote inference.
-
-Avoid adding telemetry, hosted model URLs, upload endpoints, or server-side image
-processing unless the product promise is intentionally changed.

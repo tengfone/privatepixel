@@ -60,10 +60,7 @@ describe("local background removal routing", () => {
   it("runs the primary model before the fallback for best mode", async () => {
     const calls: BackgroundRemovalModel[] = [];
     const source = new ImageData(
-      new Uint8ClampedArray([
-        255, 0, 0, 255,
-        0, 255, 0, 255,
-      ]),
+      new Uint8ClampedArray([255, 0, 0, 255, 0, 255, 0, 255]),
       2,
       1,
     );
@@ -78,30 +75,65 @@ describe("local background removal routing", () => {
     const result = await runtime.removeBackground(source, { mode: "best" });
 
     expect(calls).toEqual(["modnet", "rmbg"]);
-    expect(Array.from(result.data)).toEqual([
-      255, 0, 0, 0,
-      0, 255, 0, 255,
-    ]);
+    expect(Array.from(result.data)).toEqual([255, 0, 0, 0, 0, 255, 0, 255]);
+  });
+
+  it("emits readable routing progress for auto mode", async () => {
+    const messages: string[] = [];
+    const source = new ImageData(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1);
+    const runtime = createLocalBackgroundRemovalRuntime({
+      detectFace: vi.fn(async () => false),
+      runModel: vi.fn(async () => mask([255])),
+    });
+
+    await runtime.removeBackground(source, {
+      mode: "auto",
+      onProgress: (_progress, message) => messages.push(message),
+    });
+
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        "Choosing local background-removal route",
+        "Auto mode: checking faces locally",
+        "No face detected; starting with the general object model",
+        "Selected RMBG-1.4 general model",
+        "Applying alpha mask to source image",
+      ]),
+    );
+  });
+
+  it("keeps best mode progress monotonic while trying the fallback", async () => {
+    const progressValues: number[] = [];
+    const source = new ImageData(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1);
+    const runtime = createLocalBackgroundRemovalRuntime({
+      detectFace: vi.fn(async () => true),
+      runModel: vi.fn(async (_source, _model, onProgress) => {
+        onProgress?.(40, "Loading mocked model");
+        onProgress?.(78, "Refining mocked mask");
+        return mask([255]);
+      }),
+    });
+
+    await runtime.removeBackground(source, {
+      mode: "best",
+      onProgress: (progress) => progressValues.push(progress),
+    });
+
+    expect(progressValues).toEqual([...progressValues].sort((a, b) => a - b));
   });
 });
 
 describe("local background removal mask helpers", () => {
   it("composes source pixels with a synthetic alpha mask", () => {
     const source = new ImageData(
-      new Uint8ClampedArray([
-        10, 20, 30, 255,
-        40, 50, 60, 128,
-      ]),
+      new Uint8ClampedArray([10, 20, 30, 255, 40, 50, 60, 128]),
       2,
       1,
     );
 
     expect(
       Array.from(composeImageWithAlphaMask(source, mask([255, 128])).data),
-    ).toEqual([
-      10, 20, 30, 255,
-      40, 50, 60, 64,
-    ]);
+    ).toEqual([10, 20, 30, 255, 40, 50, 60, 64]);
   });
 
   it("prefers a non-pathological fallback mask", () => {

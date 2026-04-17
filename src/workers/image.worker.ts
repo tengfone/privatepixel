@@ -9,6 +9,7 @@ import {
 } from "../image/options";
 import createPica from "pica";
 import { loadLocalBackgroundRemovalRuntime } from "../features/background-removal/localBackgroundRemoval";
+import { processMetadataSource } from "../image/metadata";
 import type {
   ImageJobFailure,
   ImageJobProgress,
@@ -389,10 +390,11 @@ export async function processRemoveBackground(
     throw new Error("Invalid background removal operation.");
   }
 
-  postProgress(request, 24, "Preparing transparent cutout");
+  postProgress(request, 24, "Preparing image pixels for local background removal");
   const source = bitmapToImageData(bitmap);
   cancellationRegistry.throwIfCanceled(request.jobId);
 
+  postProgress(request, 26, "Starting background-removal runtime");
   const runtime = await loadLocalBackgroundRemovalRuntime();
   cancellationRegistry.throwIfCanceled(request.jobId);
 
@@ -403,7 +405,7 @@ export async function processRemoveBackground(
   });
   cancellationRegistry.throwIfCanceled(request.jobId);
 
-  postProgress(request, 92, "Encoding transparent PNG");
+  postProgress(request, 92, "Encoding transparent PNG locally");
   const canvas = imageDataToCanvas(image);
   cancellationRegistry.throwIfCanceled(request.jobId);
 
@@ -424,21 +426,34 @@ async function processRequest(request: ImageJobRequest): Promise<void> {
     postProgress(request, 5, "Reading image");
     cancellationRegistry.throwIfCanceled(request.jobId);
 
-    bitmap = await createBitmap(request.source);
-    cancellationRegistry.throwIfCanceled(request.jobId);
-
-    postProgress(request, 20, "Decoded locally");
-
     const processed =
-      request.operation.type === "resize"
-        ? await processResize(request, bitmap)
-        : request.operation.type === "compress"
-          ? await processCompress(request, bitmap)
-          : request.operation.type === "convert"
-            ? await processConvert(request, bitmap)
-            : request.operation.type === "crop"
-              ? await processCrop(request, bitmap)
-              : await processRemoveBackground(request, bitmap);
+      request.operation.type === "metadata"
+        ? await (async (options) => {
+            postProgress(
+              request,
+              40,
+              "Rewriting metadata locally without re-encoding pixels",
+            );
+            const result = await processMetadataSource(request.source, options);
+            cancellationRegistry.throwIfCanceled(request.jobId);
+            return result;
+          })(request.operation.options)
+        : await (async () => {
+            bitmap = await createBitmap(request.source);
+            cancellationRegistry.throwIfCanceled(request.jobId);
+
+            postProgress(request, 20, "Decoded locally");
+
+            return request.operation.type === "resize"
+              ? processResize(request, bitmap)
+              : request.operation.type === "compress"
+                ? processCompress(request, bitmap)
+                : request.operation.type === "convert"
+                  ? processConvert(request, bitmap)
+                  : request.operation.type === "crop"
+                    ? processCrop(request, bitmap)
+                    : processRemoveBackground(request, bitmap);
+          })();
 
     cancellationRegistry.throwIfCanceled(request.jobId);
 
