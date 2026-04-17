@@ -1072,7 +1072,11 @@ function EditorStage({
   }
 
   return (
-    <div className="editor-stage preview-stage swiss-grid-pattern">
+    <div
+      className={`editor-stage preview-stage ${
+        result ? "preview-stage-compare" : "preview-stage-single"
+      } swiss-grid-pattern`}
+    >
       <figure>
         <img src={asset.previewUrl} alt={`Selected ${asset.name}`} />
       </figure>
