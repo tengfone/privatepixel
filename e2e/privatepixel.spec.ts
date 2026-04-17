@@ -11,6 +11,14 @@ test("imports an image and produces a resize result", async ({ page }) => {
   });
 
   await expect(page.getByTestId("asset-item")).toHaveCount(1);
+  await expect(page.getByText("Live output")).toBeVisible();
+  await expect(page.getByText(/Exact size from a local browser encode/)).toBeVisible();
+
+  await page.getByRole("button", { name: /Slack avatar/ }).click();
+  await expect(page.getByRole("spinbutton", { name: "Width" })).toHaveValue("1024");
+  await expect(page.getByRole("spinbutton", { name: "Height" })).toHaveValue("1024");
+  await expect(page.locator(".resize-frame span")).toHaveText("1024 x 1024");
+
   await page.getByRole("button", { name: "Run Resize" }).click();
 
   await expect(page.getByTestId("result-row")).toBeVisible();

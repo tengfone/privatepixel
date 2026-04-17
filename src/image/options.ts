@@ -88,6 +88,130 @@ export interface PixelDimensions {
   height: number;
 }
 
+export interface ResizePreset {
+  id: string;
+  label: string;
+  detail: string;
+  width: number;
+  height: number;
+  fitMode: ResizeFitMode;
+  lockAspectRatio: boolean;
+}
+
+export const RESIZE_PRESETS: ResizePreset[] = [
+  {
+    id: "slack-avatar",
+    label: "Slack avatar",
+    detail: "Square profile",
+    width: 1024,
+    height: 1024,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "instagram-square",
+    label: "Instagram square",
+    detail: "Feed 1:1",
+    width: 1080,
+    height: 1080,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "instagram-portrait",
+    label: "Instagram portrait",
+    detail: "Feed 4:5",
+    width: 1080,
+    height: 1350,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "instagram-story",
+    label: "Instagram story",
+    detail: "Story/Reel 9:16",
+    width: 1080,
+    height: 1920,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "instagram-landscape",
+    label: "Instagram wide",
+    detail: "Feed landscape",
+    width: 1080,
+    height: 566,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+  {
+    id: "youtube-banner",
+    label: "YouTube banner",
+    detail: "Channel art",
+    width: 2560,
+    height: 1440,
+    fitMode: "cover",
+    lockAspectRatio: true,
+  },
+];
+
+export function applyResizePreset(
+  options: ResizeOptions,
+  preset: ResizePreset,
+): ResizeOptions {
+  return {
+    ...options,
+    width: preset.width,
+    height: preset.height,
+    fitMode: preset.fitMode,
+    lockAspectRatio: preset.lockAspectRatio,
+  };
+}
+
+export function normalizeRotationDegrees(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  const normalized = value % 360;
+  if (Object.is(normalized, -0)) {
+    return 0;
+  }
+
+  if (normalized > 180) {
+    return normalized - 360;
+  }
+
+  if (normalized < -180) {
+    return normalized + 360;
+  }
+
+  return normalized;
+}
+
+export function calculateRotatedDimensions(
+  width: number,
+  height: number,
+  rotation: number,
+): PixelDimensions {
+  const radians = (normalizeRotationDegrees(rotation) * Math.PI) / 180;
+  const sin = Math.abs(Math.sin(radians));
+  const cos = Math.abs(Math.cos(radians));
+  const stableSin = sin < 1e-10 ? 0 : sin;
+  const stableCos = cos < 1e-10 ? 0 : cos;
+
+  return {
+    width: Math.max(
+      1,
+      Math.ceil(Math.abs(width) * stableCos + Math.abs(height) * stableSin),
+    ),
+    height: Math.max(
+      1,
+      Math.ceil(Math.abs(width) * stableSin + Math.abs(height) * stableCos),
+    ),
+  };
+}
+
 export function calculateResizeDimensions({
   sourceWidth,
   sourceHeight,
@@ -101,16 +225,13 @@ export function calculateResizeDimensions({
   const requestedWidth = Math.max(1, Math.round(targetWidth || safeSourceWidth));
   const requestedHeight = Math.max(1, Math.round(targetHeight || safeSourceHeight));
 
-  if (!lockAspectRatio || fitMode === "stretch") {
+  if (!lockAspectRatio || fitMode === "stretch" || fitMode === "cover") {
     return { width: requestedWidth, height: requestedHeight };
   }
 
   const widthRatio = requestedWidth / safeSourceWidth;
   const heightRatio = requestedHeight / safeSourceHeight;
-  const ratio =
-    fitMode === "cover"
-      ? Math.max(widthRatio, heightRatio)
-      : Math.min(widthRatio, heightRatio);
+  const ratio = Math.min(widthRatio, heightRatio);
 
   return {
     width: Math.max(1, Math.round(safeSourceWidth * ratio)),
@@ -158,6 +279,7 @@ export function normalizeCropOptions(
     y,
     width,
     height,
+    rotation: normalizeRotationDegrees(crop.rotation),
     quality: clampQuality(crop.quality),
   };
 }
@@ -185,6 +307,7 @@ export function createCenteredCrop(
       y: Math.round((sourceHeight - height) / 2),
       width,
       height,
+      rotation: 0,
       mimeType,
       quality,
     },

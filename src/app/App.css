@@ -663,6 +663,100 @@ img {
   gap: 1rem;
 }
 
+.resize-presets {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.preset-button {
+  display: grid;
+  align-content: center;
+  gap: 0.25rem;
+  min-height: 4.5rem;
+  text-align: left;
+}
+
+.preset-button span,
+.preset-button small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.preset-button small {
+  color: inherit;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.size-preview {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  border: 4px solid var(--color-border);
+  background: var(--color-muted);
+  padding: 1rem;
+}
+
+.size-preview-ready {
+  background: var(--color-bg);
+}
+
+.size-preview-error {
+  border-color: var(--color-accent);
+}
+
+.size-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border: 2px solid var(--color-border);
+  background: var(--color-bg);
+}
+
+.size-preview-grid span {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0.75rem;
+  font-size: 0.68rem;
+  font-weight: 900;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.size-preview-grid span:nth-child(odd) {
+  border-right: 2px solid var(--color-border);
+}
+
+.size-preview-grid span:nth-child(-n + 2) {
+  border-bottom: 2px solid var(--color-border);
+}
+
+.size-preview-grid strong {
+  overflow: hidden;
+  color: var(--color-accent);
+  font-size: 0.95rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.size-preview > p:last-child {
+  margin: 0;
+  font-size: 0.76rem;
+  font-weight: 900;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
 .control-stack label,
 .runbar label {
   display: grid;
@@ -684,6 +778,17 @@ img {
 .crop-presets {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.rotation-control {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.rotation-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.5rem;
 }
 
@@ -1085,6 +1190,7 @@ progress::-moz-progress-bar {
 
   .tool-rail,
   .crop-presets,
+  .preset-grid,
   .preview-stage,
   .stage-meta,
   .result-row {

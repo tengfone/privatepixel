@@ -4,6 +4,7 @@ import {
   ChangeEvent,
   DragEvent,
   PointerEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -18,13 +19,17 @@ import {
 import { downloadBlob } from "../image/download";
 import {
   OUTPUT_MIME_TYPES,
+  RESIZE_PRESETS,
+  applyResizePreset,
   calculateResizeDimensions,
+  calculateRotatedDimensions,
   clampQuality,
   createDefaultCompressOptions,
   createDefaultResizeOptions,
   getMimeLabel,
   getOutputSizeDelta,
   isSupportedInputMime,
+  normalizeRotationDegrees,
 } from "../image/options";
 import type {
   CompressOptions,
@@ -54,11 +59,30 @@ interface AssetJobView {
   error?: string;
 }
 
+type SizePreviewStatus = "idle" | "working" | "ready" | "error";
+
+interface SizePreviewResult {
+  size: number;
+  width: number;
+  height: number;
+  mimeType: OutputMimeType;
+  durationMs: number;
+}
+
+interface SizePreviewState {
+  key?: string;
+  status: SizePreviewStatus;
+  message: string;
+  result?: SizePreviewResult;
+  error?: string;
+}
+
 interface CropPercentOptions {
   x: number;
   y: number;
   width: number;
   height: number;
+  rotation: number;
   mimeType: OutputMimeType;
   quality: number;
 }
@@ -75,7 +99,7 @@ const TOOL_COPY: Record<ImageTool, string> = {
   resize: "Drag the frame, zoom the canvas, or set exact output dimensions.",
   compress: "Set format, quality, and maximum edge length.",
   convert: "Choose a target image format.",
-  crop: "Drag, zoom, and export the selected area.",
+  crop: "Drag, zoom, rotate, and export the selected area.",
   "remove-background": "Offline background removal needs a local model bundle.",
 };
 
@@ -91,6 +115,11 @@ const EMPTY_JOB: AssetJobView = {
   message: "Ready",
 };
 
+const EMPTY_SIZE_PREVIEW: SizePreviewState = {
+  status: "idle",
+  message: "Add an image to calculate output size.",
+};
+
 function createConvertOptions(): ConvertOptions {
   return {
     mimeType: "image/png",
@@ -104,6 +133,7 @@ function createCropPercentOptions(): CropPercentOptions {
     y: 0,
     width: 100,
     height: 100,
+    rotation: 0,
     mimeType: "image/png",
     quality: 0.92,
   };
@@ -125,11 +155,15 @@ function buildCropFromPercent(
   asset: ImageAsset,
   cropPercent: CropPercentOptions,
 ): CropOptions {
+  const rotation = normalizeRotationDegrees(cropPercent.rotation);
+  const cropSource = calculateRotatedDimensions(asset.width, asset.height, rotation);
+
   return {
-    x: Math.round((asset.width * cropPercent.x) / 100),
-    y: Math.round((asset.height * cropPercent.y) / 100),
-    width: Math.round((asset.width * cropPercent.width) / 100),
-    height: Math.round((asset.height * cropPercent.height) / 100),
+    x: Math.round((cropSource.width * cropPercent.x) / 100),
+    y: Math.round((cropSource.height * cropPercent.y) / 100),
+    width: Math.round((cropSource.width * cropPercent.width) / 100),
+    height: Math.round((cropSource.height * cropPercent.height) / 100),
+    rotation,
     mimeType: cropPercent.mimeType,
     quality: cropPercent.quality,
   };
@@ -174,6 +208,7 @@ export function App() {
   const [resizeViewZoom, setResizeViewZoom] = useState(1);
   const [concurrency, setConcurrency] = useState(2);
   const [notice, setNotice] = useState("Images stay in this browser session.");
+  const [sizePreview, setSizePreview] = useState<SizePreviewState>(EMPTY_SIZE_PREVIEW);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -197,6 +232,57 @@ export function App() {
   );
 
   const activeToolDisabled = activeTool === "remove-background";
+  const sizePreviewKey = useMemo(
+    () =>
+      selectedAsset
+        ? JSON.stringify({
+            activeTool,
+            assetId: selectedAsset.id,
+            compressOptions,
+            convertOptions,
+            cropPercent,
+            resizeOptions,
+          })
+        : "empty",
+    [
+      activeTool,
+      compressOptions,
+      convertOptions,
+      cropPercent,
+      resizeOptions,
+      selectedAsset,
+    ],
+  );
+
+  const displayedSizePreview = useMemo<SizePreviewState>(() => {
+    if (!selectedAsset) {
+      return EMPTY_SIZE_PREVIEW;
+    }
+
+    if (activeToolDisabled) {
+      return {
+        status: "idle",
+        message: "Local model output size appears after the model bundle ships.",
+      };
+    }
+
+    if (isProcessing) {
+      return {
+        status: "idle",
+        message: "Live size is paused during batch processing.",
+      };
+    }
+
+    if (sizePreview.key !== sizePreviewKey) {
+      return {
+        key: sizePreviewKey,
+        status: "working",
+        message: "Preparing local size preview.",
+      };
+    }
+
+    return sizePreview;
+  }, [activeToolDisabled, isProcessing, selectedAsset, sizePreview, sizePreviewKey]);
 
   useEffect(() => {
     const activeJobIds = activeJobIdsRef.current;
@@ -218,10 +304,10 @@ export function App() {
     };
   }, []);
 
-  function getWorker(): ImageWorkerClient {
+  const getWorker = useCallback((): ImageWorkerClient => {
     workerRef.current ??= new ImageWorkerClient();
     return workerRef.current;
-  }
+  }, []);
 
   function updateJob(assetId: string, update: Partial<AssetJobView>): void {
     setJobs((current) => ({
@@ -334,46 +420,150 @@ export function App() {
     setNotice("Workspace cleared.");
   }
 
-  function buildOperation(asset: ImageAsset): ImageOperation {
-    if (activeTool === "resize") {
+  const buildOperation = useCallback(
+    (asset: ImageAsset): ImageOperation => {
+      if (activeTool === "resize") {
+        return {
+          type: "resize",
+          options: {
+            ...resizeOptions,
+            quality: clampQuality(resizeOptions.quality),
+          },
+        };
+      }
+
+      if (activeTool === "compress") {
+        return {
+          type: "compress",
+          options: {
+            ...compressOptions,
+            quality: clampQuality(compressOptions.quality),
+          },
+        };
+      }
+
+      if (activeTool === "convert") {
+        return {
+          type: "convert",
+          options: {
+            ...convertOptions,
+            quality: clampQuality(convertOptions.quality),
+          },
+        };
+      }
+
+      if (activeTool === "crop") {
+        return { type: "crop", options: buildCropFromPercent(asset, cropPercent) };
+      }
+
       return {
-        type: "resize",
-        options: {
-          ...resizeOptions,
-          quality: clampQuality(resizeOptions.quality),
-        },
+        type: "remove-background",
+        options: { outputMimeType: "image/png" },
       };
+    },
+    [activeTool, compressOptions, convertOptions, cropPercent, resizeOptions],
+  );
+
+  useEffect(() => {
+    if (!selectedAsset || activeToolDisabled || isProcessing) {
+      return;
     }
 
-    if (activeTool === "compress") {
-      return {
-        type: "compress",
-        options: {
-          ...compressOptions,
-          quality: clampQuality(compressOptions.quality),
-        },
-      };
-    }
+    let stale = false;
+    const jobId = crypto.randomUUID();
+    const activeJobIds = activeJobIdsRef.current;
+    const timeout = window.setTimeout(() => {
+      async function calculatePreview(): Promise<void> {
+        setSizePreview({
+          key: sizePreviewKey,
+          status: "working",
+          message: "Encoding a local size preview.",
+        });
 
-    if (activeTool === "convert") {
-      return {
-        type: "convert",
-        options: {
-          ...convertOptions,
-          quality: clampQuality(convertOptions.quality),
-        },
-      };
-    }
+        try {
+          const buffer = await selectedAsset.file.arrayBuffer();
+          if (stale) {
+            return;
+          }
 
-    if (activeTool === "crop") {
-      return { type: "crop", options: buildCropFromPercent(asset, cropPercent) };
-    }
+          activeJobIds.add(jobId);
+          const request: ImageJobRequest = {
+            jobId,
+            assetId: selectedAsset.id,
+            source: {
+              name: selectedAsset.name,
+              mimeType: selectedAsset.mimeType,
+              size: selectedAsset.size,
+              buffer,
+            },
+            operation: buildOperation(selectedAsset),
+          };
 
-    return {
-      type: "remove-background",
-      options: { outputMimeType: "image/png" },
+          const result = await getWorker().process(request, (progress) => {
+            if (!stale && progress.progress >= 20) {
+              setSizePreview({
+                key: sizePreviewKey,
+                status: "working",
+                message: progress.message,
+              });
+            }
+          });
+
+          if (stale) {
+            return;
+          }
+
+          setSizePreview({
+            key: sizePreviewKey,
+            status: "ready",
+            message: "Exact size from a local browser encode.",
+            result: {
+              size: result.size,
+              width: result.width,
+              height: result.height,
+              mimeType: result.mimeType,
+              durationMs: result.durationMs,
+            },
+          });
+        } catch (error) {
+          if (stale) {
+            return;
+          }
+
+          const message =
+            error instanceof Error ? error.message : "Size preview failed.";
+          if (message === "Job canceled") {
+            return;
+          }
+
+          setSizePreview({
+            key: sizePreviewKey,
+            status: "error",
+            message: "Could not calculate output size.",
+            error: message,
+          });
+        } finally {
+          activeJobIds.delete(jobId);
+        }
+      }
+
+      void calculatePreview();
+    }, 350);
+
+    return () => {
+      stale = true;
+      window.clearTimeout(timeout);
+      workerRef.current?.cancel(jobId);
+      activeJobIds.delete(jobId);
     };
-  }
+  }, [
+    activeToolDisabled,
+    getWorker,
+    buildOperation,
+    isProcessing,
+    selectedAsset,
+    sizePreviewKey,
+  ]);
 
   function handleProgress(progress: ImageJobProgress): void {
     updateJob(progress.assetId, {
@@ -619,10 +809,17 @@ export function App() {
               cropAspect={cropAspect}
               cropPosition={cropPosition}
               cropZoom={cropZoom}
+              cropRotation={cropPercent.rotation}
               onResizeChange={setResizeOptions}
               onResizeViewZoomChange={setResizeViewZoom}
               onCropPositionChange={setCropPosition}
               onCropZoomChange={setCropZoom}
+              onCropRotationChange={(rotation) =>
+                setCropPercent((current) => ({
+                  ...current,
+                  rotation: normalizeRotationDegrees(rotation),
+                }))
+              }
               onCropAreaChange={(area) =>
                 setCropPercent((current) => ({
                   ...current,
@@ -675,8 +872,16 @@ export function App() {
               onAspectChange={setCropAspect}
               onCropPercentChange={setCropPercent}
               onCropZoomChange={setCropZoom}
+              onCropRotationChange={(rotation) =>
+                setCropPercent((current) => ({
+                  ...current,
+                  rotation: normalizeRotationDegrees(rotation),
+                }))
+              }
             />
           ) : null}
+
+          <SizePreviewPanel asset={selectedAsset} preview={displayedSizePreview} />
 
           {activeTool === "remove-background" ? (
             <div className="runtime-note">
@@ -801,10 +1006,12 @@ interface EditorStageProps {
   cropAspect: CropAspect;
   cropPosition: Point;
   cropZoom: number;
+  cropRotation: number;
   onResizeChange: (options: ResizeOptions) => void;
   onResizeViewZoomChange: (zoom: number) => void;
   onCropPositionChange: (position: Point) => void;
   onCropZoomChange: (zoom: number) => void;
+  onCropRotationChange: (rotation: number) => void;
   onCropAreaChange: (area: Area) => void;
 }
 
@@ -817,10 +1024,12 @@ function EditorStage({
   cropAspect,
   cropPosition,
   cropZoom,
+  cropRotation,
   onResizeChange,
   onResizeViewZoomChange,
   onCropPositionChange,
   onCropZoomChange,
+  onCropRotationChange,
   onCropAreaChange,
 }: EditorStageProps) {
   const result = job.result;
@@ -832,9 +1041,11 @@ function EditorStage({
           image={asset.previewUrl}
           crop={cropPosition}
           zoom={cropZoom}
+          rotation={cropRotation}
           aspect={getCropAspect(asset, cropAspect)}
           onCropChange={onCropPositionChange}
           onZoomChange={onCropZoomChange}
+          onRotationChange={onCropRotationChange}
           onCropComplete={onCropAreaChange}
           showGrid
           classes={{
@@ -1094,6 +1305,50 @@ function StageMeta({ asset, result }: StageMetaProps) {
   );
 }
 
+interface SizePreviewPanelProps {
+  asset?: ImageAsset;
+  preview: SizePreviewState;
+}
+
+function SizePreviewPanel({ asset, preview }: SizePreviewPanelProps) {
+  const result = preview.result;
+
+  return (
+    <div className={`size-preview size-preview-${preview.status}`} aria-live="polite">
+      <p className="eyebrow">Live output</p>
+      <div className="size-preview-grid">
+        <span>
+          Source
+          <strong>{asset ? formatBytes(asset.size) : "None"}</strong>
+        </span>
+        <span>
+          Output
+          <strong>{result ? formatBytes(result.size) : "--"}</strong>
+        </span>
+        <span>
+          Change
+          <strong>
+            {asset && result ? getOutputSizeDelta(asset.size, result.size) : "--"}
+          </strong>
+        </span>
+        <span>
+          Pixels
+          <strong>
+            {result ? formatDimensions(result.width, result.height) : "--"}
+          </strong>
+        </span>
+      </div>
+      <p>
+        {preview.error
+          ? `${preview.message} ${preview.error}`
+          : result
+            ? `${preview.message} ${getMimeLabel(result.mimeType)} in ${result.durationMs}ms.`
+            : preview.message}
+      </p>
+    </div>
+  );
+}
+
 interface ResizeControlsProps {
   asset?: ImageAsset;
   options: ResizeOptions;
@@ -1123,6 +1378,24 @@ function ResizeControls({
         min={1}
         onChange={(height) => onChange({ ...options, height })}
       />
+      <div className="resize-presets" aria-label="Common resize targets">
+        <p className="eyebrow">Common sizes</p>
+        <div className="preset-grid">
+          {RESIZE_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              className="secondary preset-button"
+              type="button"
+              onClick={() => onChange(applyResizePreset(options, preset))}
+            >
+              <span>{preset.label}</span>
+              <small>
+                {formatDimensions(preset.width, preset.height)} / {preset.detail}
+              </small>
+            </button>
+          ))}
+        </div>
+      </div>
       <label>
         Fit mode
         <select
@@ -1230,6 +1503,7 @@ interface CropControlsProps {
   onAspectChange: (aspect: CropAspect) => void;
   onCropPercentChange: (crop: CropPercentOptions) => void;
   onCropZoomChange: (zoom: number) => void;
+  onCropRotationChange: (rotation: number) => void;
 }
 
 function CropControls({
@@ -1239,6 +1513,7 @@ function CropControls({
   onAspectChange,
   onCropPercentChange,
   onCropZoomChange,
+  onCropRotationChange,
 }: CropControlsProps) {
   return (
     <div className="control-stack">
@@ -1261,6 +1536,7 @@ function CropControls({
         max={3}
         onChange={onCropZoomChange}
       />
+      <RotationField value={cropPercent.rotation} onChange={onCropRotationChange} />
       <MimeSelect
         value={cropPercent.mimeType}
         onChange={(mimeType) => onCropPercentChange({ ...cropPercent, mimeType })}
@@ -1269,6 +1545,46 @@ function CropControls({
         value={cropPercent.quality}
         onChange={(quality) => onCropPercentChange({ ...cropPercent, quality })}
       />
+    </div>
+  );
+}
+
+interface RotationFieldProps {
+  value: number;
+  onChange: (value: number) => void;
+}
+
+function RotationField({ value, onChange }: RotationFieldProps) {
+  function shiftRotation(delta: number): void {
+    onChange(normalizeRotationDegrees(value + delta));
+  }
+
+  return (
+    <div className="rotation-control">
+      <label>
+        Rotation {Math.round(value)} deg
+        <input
+          type="range"
+          min={-180}
+          max={180}
+          step={1}
+          value={Math.round(value)}
+          onChange={(event) =>
+            onChange(normalizeRotationDegrees(Number(event.target.value)))
+          }
+        />
+      </label>
+      <div className="rotation-actions">
+        <button type="button" className="secondary" onClick={() => shiftRotation(-90)}>
+          -90
+        </button>
+        <button type="button" className="secondary" onClick={() => onChange(0)}>
+          Reset
+        </button>
+        <button type="button" className="secondary" onClick={() => shiftRotation(90)}>
+          +90
+        </button>
+      </div>
     </div>
   );
 }

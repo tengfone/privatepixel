@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  RESIZE_PRESETS,
+  applyResizePreset,
   calculateCompressedDimensions,
   calculateResizeDimensions,
+  calculateRotatedDimensions,
   clampQuality,
   createCenteredCrop,
   createOutputFilename,
   mimeToExtension,
   normalizeCropOptions,
+  normalizeRotationDegrees,
 } from "./options";
 
 describe("image option helpers", () => {
@@ -32,6 +36,19 @@ describe("image option helpers", () => {
         targetHeight: 1000,
         fitMode: "contain",
         lockAspectRatio: false,
+      }),
+    ).toEqual({ width: 1000, height: 1000 });
+  });
+
+  it("returns exact target dimensions for cover fit", () => {
+    expect(
+      calculateResizeDimensions({
+        sourceWidth: 4000,
+        sourceHeight: 2000,
+        targetWidth: 1000,
+        targetHeight: 1000,
+        fitMode: "cover",
+        lockAspectRatio: true,
       }),
     ).toEqual({ width: 1000, height: 1000 });
   });
@@ -67,6 +84,23 @@ describe("image option helpers", () => {
     expect(clampQuality(Number.NaN)).toBe(0.82);
   });
 
+  it("normalizes rotation degrees to a stable editing range", () => {
+    expect(normalizeRotationDegrees(450)).toBe(90);
+    expect(normalizeRotationDegrees(-270)).toBe(90);
+    expect(normalizeRotationDegrees(Number.NaN)).toBe(0);
+  });
+
+  it("calculates rotated crop source dimensions", () => {
+    expect(calculateRotatedDimensions(400, 300, 0)).toEqual({
+      width: 400,
+      height: 300,
+    });
+    expect(calculateRotatedDimensions(400, 300, 90)).toEqual({
+      width: 300,
+      height: 400,
+    });
+  });
+
   it("normalizes crop bounds", () => {
     expect(
       normalizeCropOptions(
@@ -75,6 +109,7 @@ describe("image option helpers", () => {
           y: 10,
           width: 1000,
           height: 1000,
+          rotation: 450,
           mimeType: "image/png",
           quality: 1.5,
         },
@@ -86,6 +121,7 @@ describe("image option helpers", () => {
       y: 10,
       width: 400,
       height: 290,
+      rotation: 90,
       mimeType: "image/png",
       quality: 1,
     });
@@ -97,6 +133,32 @@ describe("image option helpers", () => {
       y: 0,
       width: 900,
       height: 900,
+    });
+  });
+
+  it("applies common resize presets without changing output format", () => {
+    const preset = RESIZE_PRESETS.find((candidate) => candidate.id === "slack-avatar");
+
+    expect(preset).toBeDefined();
+    expect(
+      applyResizePreset(
+        {
+          width: 400,
+          height: 300,
+          fitMode: "contain",
+          lockAspectRatio: false,
+          mimeType: "image/avif",
+          quality: 0.6,
+        },
+        preset!,
+      ),
+    ).toEqual({
+      width: 1024,
+      height: 1024,
+      fitMode: "cover",
+      lockAspectRatio: true,
+      mimeType: "image/avif",
+      quality: 0.6,
     });
   });
 });

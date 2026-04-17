@@ -1,8 +1,10 @@
 import {
   calculateCompressedDimensions,
   calculateResizeDimensions,
+  calculateRotatedDimensions,
   clampQuality,
   createOutputFilename,
+  normalizeRotationDegrees,
   normalizeCropOptions,
 } from "../image/options";
 import createPica from "pica";
@@ -126,6 +128,33 @@ function rgbaToCanvas(
   return canvas;
 }
 
+function isUnrotated(rotation: number): boolean {
+  return Math.abs(normalizeRotationDegrees(rotation)) < 0.001;
+}
+
+function drawRotatedCrop(
+  context: OffscreenCanvasRenderingContext2D,
+  bitmap: ImageBitmap,
+  crop: { x: number; y: number; width: number; height: number; rotation: number },
+): void {
+  const rotation = normalizeRotationDegrees(crop.rotation);
+  const rotatedDimensions = calculateRotatedDimensions(
+    bitmap.width,
+    bitmap.height,
+    rotation,
+  );
+  const radians = (rotation * Math.PI) / 180;
+
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.translate(
+    rotatedDimensions.width / 2 - crop.x,
+    rotatedDimensions.height / 2 - crop.y,
+  );
+  context.rotate(radians);
+  context.drawImage(bitmap, -bitmap.width / 2, -bitmap.height / 2);
+}
+
 async function encodeCanvas(
   canvas: OffscreenCanvas,
   mimeType: OutputMimeType,
@@ -195,11 +224,27 @@ async function processResize(
   });
 
   postProgress(request, 45, "Resizing with high-quality local filters");
-  const canvas = await resizeBitmapToCanvas(
-    bitmap,
-    dimensions.width,
-    dimensions.height,
-  );
+
+  let canvas: OffscreenCanvas;
+
+  if (options.lockAspectRatio && options.fitMode === "cover") {
+    const coverRatio = Math.max(
+      dimensions.width / bitmap.width,
+      dimensions.height / bitmap.height,
+    );
+    const coverWidth = Math.max(1, Math.round(bitmap.width * coverRatio));
+    const coverHeight = Math.max(1, Math.round(bitmap.height * coverRatio));
+    const coverCanvas = await resizeBitmapToCanvas(bitmap, coverWidth, coverHeight);
+    canvas = new OffscreenCanvas(dimensions.width, dimensions.height);
+    const context = getContext(canvas);
+    context.drawImage(
+      coverCanvas,
+      Math.round((dimensions.width - coverWidth) / 2),
+      Math.round((dimensions.height - coverHeight) / 2),
+    );
+  } else {
+    canvas = await resizeBitmapToCanvas(bitmap, dimensions.width, dimensions.height);
+  }
 
   cancellationRegistry.throwIfCanceled(request.jobId);
 
@@ -280,27 +325,36 @@ async function processCrop(
     throw new Error("Invalid crop operation.");
   }
 
-  const options = normalizeCropOptions(
-    request.operation.options,
+  const cropSourceDimensions = calculateRotatedDimensions(
     bitmap.width,
     bitmap.height,
+    request.operation.options.rotation,
+  );
+  const options = normalizeCropOptions(
+    request.operation.options,
+    cropSourceDimensions.width,
+    cropSourceDimensions.height,
   );
 
   postProgress(request, 55, "Cropping locally");
 
   const canvas = new OffscreenCanvas(options.width, options.height);
   const context = getContext(canvas);
-  context.drawImage(
-    bitmap,
-    options.x,
-    options.y,
-    options.width,
-    options.height,
-    0,
-    0,
-    options.width,
-    options.height,
-  );
+  if (isUnrotated(options.rotation)) {
+    context.drawImage(
+      bitmap,
+      options.x,
+      options.y,
+      options.width,
+      options.height,
+      0,
+      0,
+      options.width,
+      options.height,
+    );
+  } else {
+    drawRotatedCrop(context, bitmap, options);
+  }
 
   cancellationRegistry.throwIfCanceled(request.jobId);
 

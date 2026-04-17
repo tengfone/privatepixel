@@ -57,6 +57,7 @@ export interface CropOptions {
   y: number;
   width: number;
   height: number;
+  rotation: number;
   mimeType: OutputMimeType;
   quality: number;
 }
