@@ -3,6 +3,8 @@ dist
 coverage
 test-results
 playwright-report
+output/playwright
+.pnpm-store
 *.tsbuildinfo
 src/wasm/generated/*.wasm
 src/wasm/generated/*.js

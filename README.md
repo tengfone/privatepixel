@@ -17,11 +17,11 @@ server-side image processing, no paywalls, and no watermarks.
 ## Scripts
 
 ```sh
-npm install
-npm run dev
-npm run build
-npm run test
-npm run test:e2e
+pnpm install
+pnpm run dev
+pnpm run build
+pnpm run test
+pnpm run test:e2e
 ```
 
 The Rust crate is scaffolded in `wasm/privatepixel-core`. Building it requires a

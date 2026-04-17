@@ -1,4 +1,14 @@
-import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import Cropper from "react-easy-crop";
+import type { Area, Point } from "react-easy-crop";
+import {
+  ChangeEvent,
+  DragEvent,
+  PointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   createImageAsset,
   formatBytes,
@@ -10,7 +20,6 @@ import {
   OUTPUT_MIME_TYPES,
   calculateResizeDimensions,
   clampQuality,
-  createCenteredCrop,
   createDefaultCompressOptions,
   createDefaultResizeOptions,
   getMimeLabel,
@@ -34,6 +43,8 @@ import type {
 import { ImageWorkerClient } from "../workers/imageClient";
 
 type JobStatus = "idle" | "queued" | "processing" | "done" | "error";
+type CropAspect = "original" | "1:1" | "4:3" | "16:9";
+type ResizeHandle = "width" | "height" | "both";
 
 interface AssetJobView {
   status: JobStatus;
@@ -43,7 +54,14 @@ interface AssetJobView {
   error?: string;
 }
 
-type CropAspect = "free" | "1:1" | "4:3" | "16:9";
+interface CropPercentOptions {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  mimeType: OutputMimeType;
+  quality: number;
+}
 
 const TOOL_LABELS: Record<ImageTool, string> = {
   resize: "Resize",
@@ -54,14 +72,14 @@ const TOOL_LABELS: Record<ImageTool, string> = {
 };
 
 const TOOL_COPY: Record<ImageTool, string> = {
-  resize: "Set target dimensions and export clean local copies.",
-  compress: "Reduce file size with a practical quality target.",
-  convert: "Switch between PNG, JPEG, and WebP without uploading.",
-  crop: "Use centered presets or a freeform crop box.",
-  "remove-background": "Prepared for local model assets in a lazy runtime.",
+  resize: "Drag the frame or set exact output dimensions.",
+  compress: "Set format, quality, and maximum edge length.",
+  convert: "Choose a target image format.",
+  crop: "Drag, zoom, and export the selected area.",
+  "remove-background": "Local cutout model is not bundled yet.",
 };
 
-const CROP_ASPECTS: Record<Exclude<CropAspect, "free">, number> = {
+const CROP_ASPECTS: Record<Exclude<CropAspect, "original">, number> = {
   "1:1": 1,
   "4:3": 4 / 3,
   "16:9": 16 / 9,
@@ -80,13 +98,13 @@ function createConvertOptions(): ConvertOptions {
   };
 }
 
-function createCropPercentOptions() {
+function createCropPercentOptions(): CropPercentOptions {
   return {
-    x: 10,
-    y: 10,
-    width: 80,
-    height: 80,
-    mimeType: "image/png" as OutputMimeType,
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 100,
+    mimeType: "image/png",
     quality: 0.92,
   };
 }
@@ -95,22 +113,17 @@ function getJobView(jobs: Record<string, AssetJobView>, assetId: string): AssetJ
   return jobs[assetId] ?? EMPTY_JOB;
 }
 
-function getAspectDescription(asset: ImageAsset, options: ResizeOptions): string {
-  const dimensions = calculateResizeDimensions({
-    sourceWidth: asset.width,
-    sourceHeight: asset.height,
-    targetWidth: options.width,
-    targetHeight: options.height,
-    fitMode: options.fitMode,
-    lockAspectRatio: options.lockAspectRatio,
-  });
+function getCropAspect(asset: ImageAsset | undefined, cropAspect: CropAspect): number {
+  if (cropAspect === "original") {
+    return asset ? asset.width / asset.height : 1;
+  }
 
-  return formatDimensions(dimensions.width, dimensions.height);
+  return CROP_ASPECTS[cropAspect];
 }
 
 function buildCropFromPercent(
   asset: ImageAsset,
-  cropPercent: ReturnType<typeof createCropPercentOptions>,
+  cropPercent: CropPercentOptions,
 ): CropOptions {
   return {
     x: Math.round((asset.width * cropPercent.x) / 100),
@@ -122,8 +135,13 @@ function buildCropFromPercent(
   };
 }
 
+function clampPercent(value: number): number {
+  return Math.min(100, Math.max(5, value));
+}
+
 export function App() {
   const [assets, setAssets] = useState<ImageAsset[]>([]);
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Record<string, AssetJobView>>({});
   const [activeTool, setActiveTool] = useState<ImageTool>("resize");
   const [resizeOptions, setResizeOptions] = useState<ResizeOptions>(
@@ -134,8 +152,10 @@ export function App() {
   );
   const [convertOptions, setConvertOptions] =
     useState<ConvertOptions>(createConvertOptions());
-  const [cropAspect, setCropAspect] = useState<CropAspect>("1:1");
+  const [cropAspect, setCropAspect] = useState<CropAspect>("original");
   const [cropPercent, setCropPercent] = useState(createCropPercentOptions);
+  const [cropPosition, setCropPosition] = useState<Point>({ x: 0, y: 0 });
+  const [cropZoom, setCropZoom] = useState(1);
   const [concurrency, setConcurrency] = useState(2);
   const [notice, setNotice] = useState("Images stay in this browser session.");
   const [isDragging, setIsDragging] = useState(false);
@@ -147,6 +167,11 @@ export function App() {
   const assetUrlsRef = useRef(new Set<string>());
   const resultUrlsRef = useRef(new Set<string>());
 
+  const selectedAsset = useMemo(
+    () => assets.find((asset) => asset.id === selectedAssetId) ?? assets[0],
+    [assets, selectedAssetId],
+  );
+
   const completedResults = useMemo(
     () =>
       assets
@@ -155,7 +180,6 @@ export function App() {
     [assets, jobs],
   );
 
-  const selectedPreview = assets[0];
   const activeToolDisabled = activeTool === "remove-background";
 
   useEffect(() => {
@@ -237,6 +261,10 @@ export function App() {
     }
 
     setAssets((current) => [...current, ...imported]);
+    if (!assets.length && imported[0]) {
+      setSelectedAssetId(imported[0].id);
+      setResizeOptions(createDefaultResizeOptions(imported[0]));
+    }
     setNotice(
       failed
         ? `Imported ${imported.length} image${imported.length === 1 ? "" : "s"}; ${failed} could not be decoded.`
@@ -258,7 +286,13 @@ export function App() {
       URL.revokeObjectURL(result.url);
     }
 
-    setAssets((current) => current.filter((candidate) => candidate.id !== assetId));
+    setAssets((current) => {
+      const next = current.filter((candidate) => candidate.id !== assetId);
+      if (selectedAssetId === assetId) {
+        setSelectedAssetId(next[0]?.id ?? null);
+      }
+      return next;
+    });
     setJobs((current) => {
       const next = { ...current };
       delete next[assetId];
@@ -279,6 +313,7 @@ export function App() {
       }
     }
     setAssets([]);
+    setSelectedAssetId(null);
     setJobs({});
     setNotice("Workspace cleared.");
   }
@@ -315,18 +350,7 @@ export function App() {
     }
 
     if (activeTool === "crop") {
-      const crop =
-        cropAspect === "free"
-          ? buildCropFromPercent(asset, cropPercent)
-          : createCenteredCrop(
-              asset.width,
-              asset.height,
-              CROP_ASPECTS[cropAspect],
-              cropPercent.mimeType,
-              cropPercent.quality,
-            );
-
-      return { type: "crop", options: crop };
+      return { type: "crop", options: buildCropFromPercent(asset, cropPercent) };
     }
 
     return {
@@ -398,9 +422,7 @@ export function App() {
     }
 
     if (activeToolDisabled) {
-      setNotice(
-        "Background removal is wired as a lazy local runtime, but model assets are not bundled yet.",
-      );
+      setNotice("Add a bundled local model before enabling background removal.");
       return;
     }
 
@@ -443,7 +465,7 @@ export function App() {
 
     if (runTokenRef.current === runToken) {
       setIsProcessing(false);
-      setNotice("Processing complete. Download results from the queue.");
+      setNotice("Processing complete. Download results from the manifest.");
     }
   }
 
@@ -493,200 +515,452 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">PrivatePixel</p>
-          <h1>Local image tools, no upload path.</h1>
+      <header className="masthead swiss-grid-pattern">
+        <div className="masthead-index">
+          <span>01</span>
+          <span>PrivatePixel</span>
         </div>
-        <p className="privacy-note">
-          No accounts. No watermarks. No server-side image processing.
-        </p>
+        <h1>Local image workshop</h1>
+        <p>No uploads. No account. No watermark.</p>
       </header>
 
-      <section className="workspace" aria-label="PrivatePixel workspace">
-        <div
-          className={`dropzone${isDragging ? " dropzone-active" : ""}`}
-          onDragOver={(event) => {
-            event.preventDefault();
-            setIsDragging(true);
-          }}
-          onDragLeave={() => setIsDragging(false)}
-          onDrop={handleDrop}
-          data-testid="dropzone"
-        >
-          <div>
-            <h2>Drop images here</h2>
-            <p>{notice}</p>
+      <section
+        className={`dropzone swiss-dots${isDragging ? " dropzone-active" : ""}`}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={handleDrop}
+        data-testid="dropzone"
+      >
+        <div>
+          <p className="eyebrow">02. Ingest</p>
+          <h2>Drop images here</h2>
+        </div>
+        <p>{notice}</p>
+        <label className="file-button">
+          Choose images
+          <input
+            data-testid="file-input"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif"
+            multiple
+            onChange={handleFileInput}
+          />
+        </label>
+      </section>
+
+      <section className="workbench" aria-label="PrivatePixel workspace">
+        <aside className="tool-rail" aria-label="Tool selection">
+          <p className="eyebrow">03. Method</p>
+          {(Object.keys(TOOL_LABELS) as ImageTool[]).map((tool, index) => (
+            <button
+              key={tool}
+              className={tool === activeTool ? "active" : ""}
+              type="button"
+              onClick={() => setActiveTool(tool)}
+            >
+              <span>{String(index + 1).padStart(2, "0")}</span>
+              {TOOL_LABELS[tool]}
+            </button>
+          ))}
+        </aside>
+
+        <section className="stage-panel" aria-label="Image editor">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">04. Work area</p>
+              <h2>{TOOL_LABELS[activeTool]}</h2>
+            </div>
+            <p>{TOOL_COPY[activeTool]}</p>
           </div>
-          <label className="file-button">
-            Choose images
-            <input
-              data-testid="file-input"
-              type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif"
-              multiple
-              onChange={handleFileInput}
+
+          {selectedAsset ? (
+            <EditorStage
+              activeTool={activeTool}
+              asset={selectedAsset}
+              job={getJobView(jobs, selectedAsset.id)}
+              resizeOptions={resizeOptions}
+              cropAspect={cropAspect}
+              cropPercent={cropPercent}
+              cropPosition={cropPosition}
+              cropZoom={cropZoom}
+              onResizeChange={setResizeOptions}
+              onCropPositionChange={setCropPosition}
+              onCropZoomChange={setCropZoom}
+              onCropAreaChange={(area) =>
+                setCropPercent((current) => ({
+                  ...current,
+                  x: area.x,
+                  y: area.y,
+                  width: area.width,
+                  height: area.height,
+                }))
+              }
             />
-          </label>
+          ) : (
+            <div className="empty-stage swiss-diagonal">
+              <span>0</span>
+              <p>Add images to open the local work area.</p>
+            </div>
+          )}
+        </section>
+
+        <aside className="control-panel" aria-label="Tool controls">
+          <div className="section-heading compact">
+            <div>
+              <p className="eyebrow">05. Controls</p>
+              <h2>Output</h2>
+            </div>
+          </div>
+
+          {activeTool === "resize" ? (
+            <ResizeControls
+              asset={selectedAsset}
+              options={resizeOptions}
+              onChange={setResizeOptions}
+            />
+          ) : null}
+
+          {activeTool === "compress" ? (
+            <CompressControls options={compressOptions} onChange={setCompressOptions} />
+          ) : null}
+
+          {activeTool === "convert" ? (
+            <ConvertControls options={convertOptions} onChange={setConvertOptions} />
+          ) : null}
+
+          {activeTool === "crop" ? (
+            <CropControls
+              cropAspect={cropAspect}
+              cropPercent={cropPercent}
+              cropZoom={cropZoom}
+              onAspectChange={setCropAspect}
+              onCropPercentChange={setCropPercent}
+              onCropZoomChange={setCropZoom}
+            />
+          ) : null}
+
+          {activeTool === "remove-background" ? (
+            <div className="runtime-note">
+              <p className="eyebrow">Model required</p>
+              <h3>Offline cutout is paused.</h3>
+              <p>
+                Ship a local model bundle under static assets, then enable this worker
+                path without remote inference.
+              </p>
+            </div>
+          ) : null}
+
+          <div className="runbar">
+            <label>
+              Batch workers
+              <select
+                value={concurrency}
+                onChange={(event) => setConcurrency(Number(event.target.value))}
+              >
+                <option value={1}>1</option>
+                <option value={2}>2</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => void processBatch()}
+              disabled={isProcessing || activeToolDisabled || !assets.length}
+              data-testid="run-tool"
+            >
+              Run {TOOL_LABELS[activeTool]}
+            </button>
+            <button
+              className="secondary"
+              type="button"
+              onClick={cancelProcessing}
+              disabled={!isProcessing}
+            >
+              Cancel
+            </button>
+          </div>
+        </aside>
+      </section>
+
+      <section className="manifest-panel" aria-label="Image queue">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">06. Manifest</p>
+            <h2>
+              {assets.length} image{assets.length === 1 ? "" : "s"}
+            </h2>
+          </div>
+          <div className="queue-actions">
+            <button
+              className="secondary"
+              type="button"
+              onClick={downloadAll}
+              disabled={!completedResults.length}
+            >
+              Download results
+            </button>
+            <button
+              className="secondary danger"
+              type="button"
+              onClick={clearAll}
+              disabled={!assets.length}
+            >
+              Clear
+            </button>
+          </div>
         </div>
 
-        <div className="tool-layout">
-          <section className="tools" aria-label="Image tools">
-            <nav className="tool-tabs" aria-label="Tool selection">
-              {(Object.keys(TOOL_LABELS) as ImageTool[]).map((tool) => (
-                <button
-                  key={tool}
-                  className={tool === activeTool ? "active" : ""}
-                  type="button"
-                  onClick={() => setActiveTool(tool)}
-                >
-                  {TOOL_LABELS[tool]}
-                </button>
-              ))}
-            </nav>
-
-            <div className="tool-panel">
-              <div className="tool-heading">
-                <div>
-                  <p className="eyebrow">{TOOL_LABELS[activeTool]}</p>
-                  <h2>{TOOL_COPY[activeTool]}</h2>
-                </div>
-                {selectedPreview && activeTool === "resize" ? (
-                  <span className="prediction">
-                    First result: {getAspectDescription(selectedPreview, resizeOptions)}
-                  </span>
-                ) : null}
-              </div>
-
-              {activeTool === "resize" ? (
-                <ResizeControls options={resizeOptions} onChange={setResizeOptions} />
-              ) : null}
-
-              {activeTool === "compress" ? (
-                <CompressControls
-                  options={compressOptions}
-                  onChange={setCompressOptions}
-                />
-              ) : null}
-
-              {activeTool === "convert" ? (
-                <ConvertControls
-                  options={convertOptions}
-                  onChange={setConvertOptions}
-                />
-              ) : null}
-
-              {activeTool === "crop" ? (
-                <CropControls
-                  cropAspect={cropAspect}
-                  cropPercent={cropPercent}
-                  onAspectChange={setCropAspect}
-                  onCropPercentChange={setCropPercent}
-                />
-              ) : null}
-
-              {activeTool === "remove-background" ? (
-                <div className="runtime-note">
-                  <h3>Local model runtime</h3>
-                  <p>
-                    The worker contract is ready, but model files are not shipped in
-                    this build. When added, they should load from local static assets
-                    and stay out of the initial bundle.
-                  </p>
-                </div>
-              ) : null}
-
-              <div className="runbar">
-                <label>
-                  Batch workers
-                  <select
-                    value={concurrency}
-                    onChange={(event) => setConcurrency(Number(event.target.value))}
-                  >
-                    <option value={1}>1</option>
-                    <option value={2}>2</option>
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  onClick={() => void processBatch()}
-                  disabled={isProcessing || activeToolDisabled || !assets.length}
-                  data-testid="run-tool"
-                >
-                  Run {TOOL_LABELS[activeTool]}
-                </button>
-                <button
-                  className="secondary"
-                  type="button"
-                  onClick={cancelProcessing}
-                  disabled={!isProcessing}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </section>
-
-          <section className="queue" aria-label="Image queue">
-            <div className="queue-heading">
-              <div>
-                <p className="eyebrow">Queue</p>
-                <h2>
-                  {assets.length} image{assets.length === 1 ? "" : "s"}
-                </h2>
-              </div>
-              <div className="queue-actions">
-                <button
-                  className="secondary"
-                  type="button"
-                  onClick={downloadAll}
-                  disabled={!completedResults.length}
-                >
-                  Download results
-                </button>
-                <button
-                  className="secondary danger"
-                  type="button"
-                  onClick={clearAll}
-                  disabled={!assets.length}
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-
-            {assets.length ? (
-              <div className="asset-grid" data-testid="asset-grid">
-                {assets.map((asset) => (
-                  <AssetItem
-                    key={asset.id}
-                    asset={asset}
-                    job={getJobView(jobs, asset.id)}
-                    onRemove={() => removeAsset(asset.id)}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="empty-state">
-                <h3>Your local queue is empty</h3>
-                <p>Add images to preview metadata and run tools in batches.</p>
-              </div>
-            )}
-          </section>
-        </div>
+        {assets.length ? (
+          <div className="asset-manifest" data-testid="asset-grid">
+            {assets.map((asset, index) => (
+              <AssetItem
+                key={asset.id}
+                asset={asset}
+                index={index}
+                isSelected={selectedAsset?.id === asset.id}
+                job={getJobView(jobs, asset.id)}
+                onRemove={() => removeAsset(asset.id)}
+                onSelect={() => {
+                  setSelectedAssetId(asset.id);
+                  setResizeOptions(createDefaultResizeOptions(asset));
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state swiss-dots">
+            <h3>Your local queue is empty</h3>
+            <p>Add images to preview metadata and run tools in batches.</p>
+          </div>
+        )}
       </section>
     </main>
   );
 }
 
+interface EditorStageProps {
+  activeTool: ImageTool;
+  asset: ImageAsset;
+  job: AssetJobView;
+  resizeOptions: ResizeOptions;
+  cropAspect: CropAspect;
+  cropPercent: CropPercentOptions;
+  cropPosition: Point;
+  cropZoom: number;
+  onResizeChange: (options: ResizeOptions) => void;
+  onCropPositionChange: (position: Point) => void;
+  onCropZoomChange: (zoom: number) => void;
+  onCropAreaChange: (area: Area) => void;
+}
+
+function EditorStage({
+  activeTool,
+  asset,
+  job,
+  resizeOptions,
+  cropAspect,
+  cropPosition,
+  cropZoom,
+  onResizeChange,
+  onCropPositionChange,
+  onCropZoomChange,
+  onCropAreaChange,
+}: EditorStageProps) {
+  const result = job.result;
+
+  if (activeTool === "crop") {
+    return (
+      <div className="editor-stage crop-stage">
+        <Cropper
+          image={asset.previewUrl}
+          crop={cropPosition}
+          zoom={cropZoom}
+          aspect={getCropAspect(asset, cropAspect)}
+          onCropChange={onCropPositionChange}
+          onZoomChange={onCropZoomChange}
+          onCropComplete={onCropAreaChange}
+          showGrid
+          classes={{
+            containerClassName: "cropper-container",
+            cropAreaClassName: "cropper-area",
+          }}
+        />
+        <StageMeta asset={asset} result={result} />
+      </div>
+    );
+  }
+
+  if (activeTool === "resize") {
+    return (
+      <ResizeStage
+        asset={asset}
+        options={resizeOptions}
+        result={result}
+        onChange={onResizeChange}
+      />
+    );
+  }
+
+  return (
+    <div className="editor-stage preview-stage swiss-grid-pattern">
+      <figure>
+        <img src={asset.previewUrl} alt={`Selected ${asset.name}`} />
+      </figure>
+      {result ? (
+        <figure>
+          <img src={result.url} alt={`Processed ${asset.name}`} />
+        </figure>
+      ) : null}
+      <StageMeta asset={asset} result={result} />
+    </div>
+  );
+}
+
+interface ResizeStageProps {
+  asset: ImageAsset;
+  options: ResizeOptions;
+  result?: ProcessedImageResult;
+  onChange: (options: ResizeOptions) => void;
+}
+
+function ResizeStage({ asset, options, result, onChange }: ResizeStageProps) {
+  const output = calculateResizeDimensions({
+    sourceWidth: asset.width,
+    sourceHeight: asset.height,
+    targetWidth: options.width,
+    targetHeight: options.height,
+    fitMode: options.fitMode,
+    lockAspectRatio: options.lockAspectRatio,
+  });
+  const frameWidth = clampPercent((output.width / asset.width) * 100);
+  const frameHeight = clampPercent((output.height / asset.height) * 100);
+
+  function updateFromPointer(
+    event: PointerEvent<HTMLButtonElement> | globalThis.PointerEvent,
+    handle: ResizeHandle,
+    rect: DOMRect,
+  ): void {
+    const widthRatio = Math.min(
+      1,
+      Math.max(0.05, (event.clientX - rect.left) / rect.width),
+    );
+    const heightRatio = Math.min(
+      1,
+      Math.max(0.05, (event.clientY - rect.top) / rect.height),
+    );
+    const nextWidth =
+      handle === "height" ? options.width : Math.round(asset.width * widthRatio);
+    const nextHeight =
+      handle === "width" ? options.height : Math.round(asset.height * heightRatio);
+
+    if (options.lockAspectRatio) {
+      const sourceRatio = asset.width / asset.height;
+      if (handle === "height") {
+        onChange({
+          ...options,
+          width: Math.max(1, Math.round(nextHeight * sourceRatio)),
+          height: Math.max(1, nextHeight),
+        });
+      } else {
+        onChange({
+          ...options,
+          width: Math.max(1, nextWidth),
+          height: Math.max(1, Math.round(nextWidth / sourceRatio)),
+        });
+      }
+      return;
+    }
+
+    onChange({
+      ...options,
+      width: Math.max(1, nextWidth),
+      height: Math.max(1, nextHeight),
+    });
+  }
+
+  function startDrag(handle: ResizeHandle) {
+    return (event: PointerEvent<HTMLButtonElement>): void => {
+      const stage = event.currentTarget.closest(".resize-stage");
+      const rect = stage?.getBoundingClientRect();
+      if (!rect) {
+        return;
+      }
+
+      event.currentTarget.setPointerCapture(event.pointerId);
+      updateFromPointer(event, handle, rect);
+
+      const handleMove = (moveEvent: globalThis.PointerEvent): void => {
+        updateFromPointer(moveEvent, handle, rect);
+      };
+      const stop = (): void => {
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", stop);
+      };
+
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", stop);
+    };
+  }
+
+  return (
+    <div className="editor-stage resize-stage swiss-grid-pattern">
+      <img src={asset.previewUrl} alt={`Selected ${asset.name}`} />
+      <div
+        className="resize-frame"
+        style={{ width: `${frameWidth}%`, height: `${frameHeight}%` }}
+      >
+        <span>{formatDimensions(output.width, output.height)}</span>
+        <button
+          type="button"
+          className="resize-handle resize-handle-x"
+          aria-label="Drag width"
+          onPointerDown={startDrag("width")}
+        />
+        <button
+          type="button"
+          className="resize-handle resize-handle-y"
+          aria-label="Drag height"
+          onPointerDown={startDrag("height")}
+        />
+        <button
+          type="button"
+          className="resize-handle resize-handle-corner"
+          aria-label="Drag width and height"
+          onPointerDown={startDrag("both")}
+        />
+      </div>
+      <StageMeta asset={asset} result={result} />
+    </div>
+  );
+}
+
+interface StageMetaProps {
+  asset: ImageAsset;
+  result?: ProcessedImageResult;
+}
+
+function StageMeta({ asset, result }: StageMetaProps) {
+  return (
+    <div className="stage-meta">
+      <span>{asset.name}</span>
+      <span>{formatDimensions(asset.width, asset.height)}</span>
+      <span>{formatBytes(asset.size)}</span>
+      {result ? <span>Result {formatBytes(result.size)}</span> : null}
+    </div>
+  );
+}
+
 interface ResizeControlsProps {
+  asset?: ImageAsset;
   options: ResizeOptions;
   onChange: (options: ResizeOptions) => void;
 }
 
-function ResizeControls({ options, onChange }: ResizeControlsProps) {
+function ResizeControls({ asset, options, onChange }: ResizeControlsProps) {
   return (
-    <div className="control-grid">
+    <div className="control-stack">
       <NumberField
         label="Width"
         value={options.width}
@@ -733,6 +1007,15 @@ function ResizeControls({ options, onChange }: ResizeControlsProps) {
         />
         Lock aspect ratio
       </label>
+      {asset ? (
+        <button
+          className="secondary"
+          type="button"
+          onClick={() => onChange(createDefaultResizeOptions(asset))}
+        >
+          Match selected
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -744,7 +1027,7 @@ interface CompressControlsProps {
 
 function CompressControls({ options, onChange }: CompressControlsProps) {
   return (
-    <div className="control-grid">
+    <div className="control-stack">
       <MimeSelect
         value={options.mimeType}
         onChange={(mimeType) => onChange({ ...options, mimeType })}
@@ -770,7 +1053,7 @@ interface ConvertControlsProps {
 
 function ConvertControls({ options, onChange }: ConvertControlsProps) {
   return (
-    <div className="control-grid">
+    <div className="control-stack">
       <MimeSelect
         value={options.mimeType}
         onChange={(mimeType) => onChange({ ...options, mimeType })}
@@ -785,74 +1068,51 @@ function ConvertControls({ options, onChange }: ConvertControlsProps) {
 
 interface CropControlsProps {
   cropAspect: CropAspect;
-  cropPercent: ReturnType<typeof createCropPercentOptions>;
+  cropPercent: CropPercentOptions;
+  cropZoom: number;
   onAspectChange: (aspect: CropAspect) => void;
-  onCropPercentChange: (crop: ReturnType<typeof createCropPercentOptions>) => void;
+  onCropPercentChange: (crop: CropPercentOptions) => void;
+  onCropZoomChange: (zoom: number) => void;
 }
 
 function CropControls({
   cropAspect,
   cropPercent,
+  cropZoom,
   onAspectChange,
   onCropPercentChange,
+  onCropZoomChange,
 }: CropControlsProps) {
   return (
-    <>
+    <div className="control-stack">
       <div className="crop-presets">
-        {(["1:1", "4:3", "16:9", "free"] as CropAspect[]).map((aspect) => (
+        {(["original", "1:1", "4:3", "16:9"] as CropAspect[]).map((aspect) => (
           <button
             key={aspect}
             type="button"
             className={cropAspect === aspect ? "active" : ""}
             onClick={() => onAspectChange(aspect)}
           >
-            {aspect === "free" ? "Freeform" : aspect}
+            {aspect === "original" ? "Original" : aspect}
           </button>
         ))}
       </div>
-      <div className="control-grid">
-        <MimeSelect
-          value={cropPercent.mimeType}
-          onChange={(mimeType) => onCropPercentChange({ ...cropPercent, mimeType })}
-        />
-        <QualityField
-          value={cropPercent.quality}
-          onChange={(quality) => onCropPercentChange({ ...cropPercent, quality })}
-        />
-        {cropAspect === "free" ? (
-          <>
-            <NumberField
-              label="X %"
-              value={cropPercent.x}
-              min={0}
-              max={99}
-              onChange={(x) => onCropPercentChange({ ...cropPercent, x })}
-            />
-            <NumberField
-              label="Y %"
-              value={cropPercent.y}
-              min={0}
-              max={99}
-              onChange={(y) => onCropPercentChange({ ...cropPercent, y })}
-            />
-            <NumberField
-              label="Width %"
-              value={cropPercent.width}
-              min={1}
-              max={100}
-              onChange={(width) => onCropPercentChange({ ...cropPercent, width })}
-            />
-            <NumberField
-              label="Height %"
-              value={cropPercent.height}
-              min={1}
-              max={100}
-              onChange={(height) => onCropPercentChange({ ...cropPercent, height })}
-            />
-          </>
-        ) : null}
-      </div>
-    </>
+      <QualityField
+        value={cropZoom}
+        label="Zoom"
+        min={1}
+        max={3}
+        onChange={onCropZoomChange}
+      />
+      <MimeSelect
+        value={cropPercent.mimeType}
+        onChange={(mimeType) => onCropPercentChange({ ...cropPercent, mimeType })}
+      />
+      <QualityField
+        value={cropPercent.quality}
+        onChange={(quality) => onCropPercentChange({ ...cropPercent, quality })}
+      />
+    </div>
   );
 }
 
@@ -881,20 +1141,30 @@ function NumberField({ label, value, min, max, onChange }: NumberFieldProps) {
 
 interface QualityFieldProps {
   value: number;
+  label?: string;
+  min?: number;
+  max?: number;
   onChange: (value: number) => void;
 }
 
-function QualityField({ value, onChange }: QualityFieldProps) {
+function QualityField({
+  value,
+  label = "Quality",
+  min = 0.05,
+  max = 1,
+  onChange,
+}: QualityFieldProps) {
+  const scale = label === "Zoom" ? 100 : 100;
   return (
     <label>
-      Quality {Math.round(value * 100)}%
+      {label} {label === "Zoom" ? value.toFixed(1) : `${Math.round(value * 100)}%`}
       <input
         type="range"
-        min={5}
-        max={100}
+        min={Math.round(min * scale)}
+        max={Math.round(max * scale)}
         step={1}
-        value={Math.round(value * 100)}
-        onChange={(event) => onChange(Number(event.target.value) / 100)}
+        value={Math.round(value * scale)}
+        onChange={(event) => onChange(Number(event.target.value) / scale)}
       />
     </label>
   );
@@ -925,52 +1195,55 @@ function MimeSelect({ value, onChange }: MimeSelectProps) {
 
 interface AssetItemProps {
   asset: ImageAsset;
+  index: number;
+  isSelected: boolean;
   job: AssetJobView;
   onRemove: () => void;
+  onSelect: () => void;
 }
 
-function AssetItem({ asset, job, onRemove }: AssetItemProps) {
+function AssetItem({
+  asset,
+  index,
+  isSelected,
+  job,
+  onRemove,
+  onSelect,
+}: AssetItemProps) {
   const result = job.result;
 
   return (
-    <article className="asset-item" data-testid="asset-item">
-      <div className="preview-pair">
-        <figure>
-          <img src={asset.previewUrl} alt={`Original ${asset.name}`} />
-          <figcaption>Original</figcaption>
-        </figure>
-        {result ? (
-          <figure>
-            <img src={result.url} alt={`Processed ${asset.name}`} />
-            <figcaption>Result</figcaption>
-          </figure>
-        ) : null}
-      </div>
+    <article
+      className={`asset-item${isSelected ? " selected" : ""}`}
+      data-testid="asset-item"
+    >
+      <button className="asset-select" type="button" onClick={onSelect}>
+        <span>{String(index + 1).padStart(2, "0")}</span>
+        <img src={asset.previewUrl} alt={`Original ${asset.name}`} />
+        <span>{asset.name}</span>
+      </button>
 
       <div className="asset-copy">
-        <h3 title={asset.name}>{asset.name}</h3>
         <p>
-          {formatDimensions(asset.width, asset.height)} · {formatBytes(asset.size)} ·{" "}
+          {formatDimensions(asset.width, asset.height)} / {formatBytes(asset.size)} /{" "}
           {asset.mimeType}
         </p>
-      </div>
-
-      <div className="status-row">
-        <div>
-          <span className={`status-dot ${job.status}`} />
-          {job.message}
+        <div className="status-row">
+          <div>
+            <span className={`status-dot ${job.status}`} />
+            {job.message}
+          </div>
+          <span>{job.progress}%</span>
         </div>
-        <span>{job.progress}%</span>
+        <progress value={job.progress} max={100} />
+        {job.error ? <p className="error-text">{job.error}</p> : null}
       </div>
-      <progress value={job.progress} max={100} />
-
-      {job.error ? <p className="error-text">{job.error}</p> : null}
 
       {result ? (
         <div className="result-row" data-testid="result-row">
           <span>
-            {formatDimensions(result.width, result.height)} · {formatBytes(result.size)}{" "}
-            · {getOutputSizeDelta(asset.size, result.size)}
+            {formatDimensions(result.width, result.height)} / {formatBytes(result.size)}{" "}
+            / {getOutputSizeDelta(asset.size, result.size)}
           </span>
           <button
             type="button"
@@ -979,7 +1252,9 @@ function AssetItem({ asset, job, onRemove }: AssetItemProps) {
             Download
           </button>
         </div>
-      ) : null}
+      ) : (
+        <span className="result-pending">No result</span>
+      )}
 
       <button className="remove-button" type="button" onClick={onRemove}>
         Remove

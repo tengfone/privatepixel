@@ -5,6 +5,7 @@ import {
   createOutputFilename,
   normalizeCropOptions,
 } from "../image/options";
+import createPica from "pica";
 import type {
   ImageJobFailure,
   ImageJobProgress,
@@ -18,6 +19,10 @@ import { loadPrivatePixelCore } from "../wasm/privatepixelCore";
 import { JobCanceledError, JobCancellationRegistry } from "./jobState";
 
 const cancellationRegistry = new JobCancellationRegistry();
+const highQualityResizer = createPica({
+  features: ["js", "wasm"],
+  tile: 1024,
+});
 
 function post(message: ImageWorkerOutbound): void {
   self.postMessage(message);
@@ -56,6 +61,71 @@ function getContext(canvas: OffscreenCanvas): OffscreenCanvasRenderingContext2D 
   return context;
 }
 
+async function resizeBitmapToCanvas(
+  bitmap: ImageBitmap,
+  width: number,
+  height: number,
+): Promise<OffscreenCanvas> {
+  const sourceCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const sourceContext = getContext(sourceCanvas);
+  sourceContext.drawImage(bitmap, 0, 0);
+  const sourceImage = sourceContext.getImageData(0, 0, bitmap.width, bitmap.height);
+  const sourceBuffer = new Uint8Array(
+    sourceImage.data.buffer,
+    sourceImage.data.byteOffset,
+    sourceImage.data.byteLength,
+  );
+
+  try {
+    const resized = await highQualityResizer.resizeBuffer({
+      src: sourceBuffer,
+      width: bitmap.width,
+      height: bitmap.height,
+      toWidth: width,
+      toHeight: height,
+      filter: "mks2013",
+      unsharpAmount: 120,
+      unsharpRadius: 0.6,
+      unsharpThreshold: 1,
+    });
+    return rgbaToCanvas(resized, width, height);
+  } catch {
+    const wasm = await loadPrivatePixelCore();
+    if (wasm) {
+      const resized = wasm.resize_rgba(
+        sourceBuffer,
+        bitmap.width,
+        bitmap.height,
+        width,
+        height,
+      );
+      return rgbaToCanvas(resized, width, height);
+    }
+  }
+
+  const canvas = new OffscreenCanvas(width, height);
+  const context = getContext(canvas);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(bitmap, 0, 0, width, height);
+  return canvas;
+}
+
+function rgbaToCanvas(
+  buffer: Uint8Array,
+  width: number,
+  height: number,
+): OffscreenCanvas {
+  const canvas = new OffscreenCanvas(width, height);
+  const context = getContext(canvas);
+  context.putImageData(
+    new ImageData(new Uint8ClampedArray(buffer), width, height),
+    0,
+    0,
+  );
+  return canvas;
+}
+
 async function encodeCanvas(
   canvas: OffscreenCanvas,
   mimeType: OutputMimeType,
@@ -91,53 +161,12 @@ async function processResize(
     lockAspectRatio: options.lockAspectRatio,
   });
 
-  postProgress(request, 35, "Preparing pixels");
-
-  const wasm = await loadPrivatePixelCore();
-  if (wasm) {
-    const sourceCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    const sourceContext = getContext(sourceCanvas);
-    sourceContext.drawImage(bitmap, 0, 0);
-    const sourceImage = sourceContext.getImageData(0, 0, bitmap.width, bitmap.height);
-
-    cancellationRegistry.throwIfCanceled(request.jobId);
-    postProgress(request, 55, "Resizing with local WASM");
-
-    const resized = wasm.resize_rgba(
-      new Uint8Array(sourceImage.data.buffer),
-      bitmap.width,
-      bitmap.height,
-      dimensions.width,
-      dimensions.height,
-    );
-    const outputCanvas = new OffscreenCanvas(dimensions.width, dimensions.height);
-    const outputContext = getContext(outputCanvas);
-    outputContext.putImageData(
-      new ImageData(
-        new Uint8ClampedArray(resized),
-        dimensions.width,
-        dimensions.height,
-      ),
-      0,
-      0,
-    );
-
-    cancellationRegistry.throwIfCanceled(request.jobId);
-    return {
-      blob: await encodeCanvas(outputCanvas, options.mimeType, options.quality),
-      width: dimensions.width,
-      height: dimensions.height,
-      mimeType: options.mimeType,
-    };
-  }
-
-  postProgress(request, 55, "Resizing locally");
-
-  const canvas = new OffscreenCanvas(dimensions.width, dimensions.height);
-  const context = getContext(canvas);
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = "high";
-  context.drawImage(bitmap, 0, 0, dimensions.width, dimensions.height);
+  postProgress(request, 45, "Resizing with high-quality local filters");
+  const canvas = await resizeBitmapToCanvas(
+    bitmap,
+    dimensions.width,
+    dimensions.height,
+  );
 
   cancellationRegistry.throwIfCanceled(request.jobId);
 
@@ -164,13 +193,16 @@ async function processCompress(
     options.maxDimension,
   );
 
-  postProgress(request, 55, "Compressing locally");
+  postProgress(request, 55, "Compressing with high-quality downscale");
+  const canvas =
+    dimensions.width === bitmap.width && dimensions.height === bitmap.height
+      ? new OffscreenCanvas(bitmap.width, bitmap.height)
+      : await resizeBitmapToCanvas(bitmap, dimensions.width, dimensions.height);
 
-  const canvas = new OffscreenCanvas(dimensions.width, dimensions.height);
-  const context = getContext(canvas);
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = "high";
-  context.drawImage(bitmap, 0, 0, dimensions.width, dimensions.height);
+  if (dimensions.width === bitmap.width && dimensions.height === bitmap.height) {
+    const context = getContext(canvas);
+    context.drawImage(bitmap, 0, 0);
+  }
 
   cancellationRegistry.throwIfCanceled(request.jobId);
 
