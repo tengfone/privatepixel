@@ -85,6 +85,11 @@ const MODEL_LOAD_PROGRESS: Record<BackgroundRemovalModel, number> = {
   rmbg: 44,
 };
 
+interface MediaPipeModuleWorkerGlobal {
+  import?: (url: string) => Promise<unknown>;
+  ModuleFactory?: unknown;
+}
+
 let transformersPromise: Promise<typeof import("@huggingface/transformers")> | null =
   null;
 let faceDetectorPromise: Promise<FaceDetectorType> | null = null;
@@ -128,6 +133,35 @@ async function loadTransformers(): Promise<typeof import("@huggingface/transform
 
 function hasWebGpu(): boolean {
   return typeof navigator !== "undefined" && "gpu" in navigator;
+}
+
+function installMediaPipeModuleImportPolyfill(): void {
+  const scope = globalThis as unknown as MediaPipeModuleWorkerGlobal;
+  const allowedRoot = new URL(
+    assetUrl("vendor/mediapipe/tasks-vision/wasm/"),
+    globalThis.location.href,
+  );
+  scope.import ??= async (url: string) => {
+    const scriptUrl = new URL(url, globalThis.location.href);
+    if (
+      scriptUrl.origin !== allowedRoot.origin ||
+      !scriptUrl.pathname.startsWith(allowedRoot.pathname)
+    ) {
+      throw new Error("Blocked unexpected MediaPipe loader import.");
+    }
+
+    const response = await fetch(scriptUrl, { credentials: "same-origin" });
+    if (!response.ok) {
+      throw new Error(`Could not load MediaPipe module: ${response.status}`);
+    }
+
+    // MediaPipe's fallback calls self.import() from module workers after
+    // importScripts() fails. Its classic loader must run as a classic script,
+    // not as ESM, because the generated file relies on script-scope globals.
+    const source = `${await response.text()}\n;globalThis.ModuleFactory = ModuleFactory;`;
+    (0, eval)(source);
+    return scope.ModuleFactory;
+  };
 }
 
 async function loadBackgroundModelOnDevice(
@@ -190,6 +224,7 @@ async function loadBackgroundModel(
 async function loadFaceDetector(): Promise<FaceDetectorType> {
   faceDetectorPromise ??= import("@mediapipe/tasks-vision").then(
     async ({ FaceDetector, FilesetResolver }) => {
+      installMediaPipeModuleImportPolyfill();
       const vision = await FilesetResolver.forVisionTasks(
         assetUrl("vendor/mediapipe/tasks-vision/wasm"),
       );
@@ -276,7 +311,10 @@ async function runBackgroundModel(
   const inputs = await loaded.processor(image);
   const session = loaded.model.sessions?.model;
 
-  if (session?.inputNames.length === 1 && !session.inputNames.includes("pixel_values")) {
+  if (
+    session?.inputNames.length === 1 &&
+    !session.inputNames.includes("pixel_values")
+  ) {
     inputs[session.inputNames[0]] = inputs.pixel_values;
   }
 
@@ -297,9 +335,10 @@ async function runBackgroundModel(
   }
 
   const normalized = tensorNeedsSigmoid(tensor) ? tensor.sigmoid() : tensor;
-  const mask = await loaded.RawImage.fromTensor(
-    normalized.mul(255).to("uint8"),
-  ).resize(source.width, source.height);
+  const mask = await loaded.RawImage.fromTensor(normalized.mul(255).to("uint8")).resize(
+    source.width,
+    source.height,
+  );
 
   return {
     data: mask.data,
