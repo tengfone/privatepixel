@@ -4,6 +4,9 @@ import type {
   ImageAsset,
   ImageTool,
   MetadataOptions,
+  ObjectSelectAction,
+  ObjectSelectOptions,
+  ObjectSelectPoint,
   OutputMimeType,
   RemoveBackgroundOptions,
   ResizeFitMode,
@@ -415,10 +418,25 @@ export function createDefaultMetadataOptions(): MetadataOptions {
       copyright: "",
       keywords: "",
     },
+    customTextFields: [],
     removePrivateData: true,
     removeComments: true,
     preserveColorProfile: true,
     sanitizeSvg: true,
+  };
+}
+
+export function createObjectSelectOptions(
+  point: ObjectSelectPoint,
+  action: ObjectSelectAction = "cutout",
+): ObjectSelectOptions {
+  return {
+    outputMimeType: "image/png",
+    action,
+    point: {
+      x: Math.min(1, Math.max(0, point.x)),
+      y: Math.min(1, Math.max(0, point.y)),
+    },
   };
 }
 

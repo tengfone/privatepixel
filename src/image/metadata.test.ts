@@ -3,6 +3,7 @@ import { createDefaultMetadataOptions } from "./options";
 import {
   getEffectiveMetadataOptions,
   getMetadataFormatSupport,
+  inspectMetadataSource,
   processMetadataSource,
 } from "./metadata";
 
@@ -70,6 +71,7 @@ describe("metadata helpers", () => {
       {
         ...createDefaultMetadataOptions(),
         mode: "edit",
+        customTextFields: [{ key: "Project", value: "Metadata editor" }],
         fields: {
           title: "Private sample",
           description: "",
@@ -88,6 +90,70 @@ describe("metadata helpers", () => {
     expect(text).toContain("Title");
     expect(text).toContain("Private sample");
     expect(text).toContain("PrivatePixel");
+    expect(text).toContain("Project");
+    expect(text).toContain("Metadata editor");
+
+    const inspection = inspectMetadataSource({
+      name: "sample.png",
+      mimeType: "image/png",
+      size: bytes.byteLength,
+      width: 4,
+      height: 4,
+      buffer: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    });
+    expect(inspection.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Title",
+          value: "Private sample",
+          editable: true,
+        }),
+        expect.objectContaining({
+          label: "Project",
+          value: "Metadata editor",
+          editable: true,
+        }),
+      ]),
+    );
+  });
+
+  it("inspects existing SVG metadata as editable fields", () => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><title>Existing icon</title><desc>Existing description</desc><metadata id="source">Catalog 7</metadata><!-- keep me --><rect width="10" height="10"/></svg>`;
+    const buffer = new TextEncoder().encode(svg).buffer;
+    const inspection = inspectMetadataSource({
+      name: "icon.svg",
+      mimeType: "image/svg+xml",
+      size: buffer.byteLength,
+      width: 10,
+      height: 10,
+      buffer,
+    });
+
+    expect(inspection.formatLabel).toBe("SVG");
+    expect(inspection.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Title",
+          value: "Existing icon",
+          editable: true,
+        }),
+        expect.objectContaining({
+          label: "Description",
+          value: "Existing description",
+          editable: true,
+        }),
+        expect.objectContaining({
+          label: "Metadata node: source",
+          value: "Catalog 7",
+          editable: true,
+        }),
+        expect.objectContaining({
+          label: "Comment 1",
+          value: "keep me",
+          editable: true,
+        }),
+      ]),
+    );
   });
 
   it("edits and sanitizes SVG metadata", async () => {

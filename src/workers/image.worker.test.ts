@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadLocalBackgroundRemovalRuntime } from "../features/background-removal/localBackgroundRemoval";
+import { loadLocalObjectSelectionRuntime } from "../features/object-selection/localObjectSelection";
 import type { ImageJobRequest } from "../image/types";
-import { processRemoveBackground } from "./image.worker";
+import { processObjectSelect, processRemoveBackground } from "./image.worker";
 
 vi.mock("../features/background-removal/localBackgroundRemoval", () => ({
   loadLocalBackgroundRemovalRuntime: vi.fn(),
+}));
+
+vi.mock("../features/object-selection/localObjectSelection", () => ({
+  loadLocalObjectSelectionRuntime: vi.fn(),
 }));
 
 class TestImageData {
@@ -134,6 +139,79 @@ describe("image worker background removal", () => {
         type: "progress",
         progress: 92,
         message: "Encoding transparent PNG locally",
+      }),
+    );
+  });
+
+  it("uses the mocked object selector to produce a PNG and progress messages", async () => {
+    const cutOut = vi.fn(async () => {
+      return new ImageData(
+        new Uint8ClampedArray([10, 20, 30, 255, 40, 50, 60, 0]),
+        2,
+        1,
+      );
+    });
+    vi.mocked(loadLocalObjectSelectionRuntime).mockResolvedValue({
+      createMask: vi.fn(),
+      createOverlay: vi.fn(),
+      cutOut: async (source, options) => {
+        expect(source.width).toBe(2);
+        expect(options.point).toEqual({ x: 0.25, y: 0.75 });
+        options.onProgress?.(54, "Mocked object selector");
+        return cutOut();
+      },
+    });
+
+    const request: ImageJobRequest = {
+      jobId: "job-2",
+      assetId: "asset-2",
+      source: {
+        name: "mug.png",
+        mimeType: "image/png",
+        size: 2,
+        width: 2,
+        height: 1,
+        buffer: new ArrayBuffer(2),
+      },
+      operation: {
+        type: "object-select",
+        options: {
+          outputMimeType: "image/png",
+          action: "cutout",
+          point: { x: 0.25, y: 0.75 },
+        },
+      },
+    };
+
+    const result = await processObjectSelect(request, {
+      width: 2,
+      height: 1,
+    } as ImageBitmap);
+
+    expect(result.mimeType).toBe("image/png");
+    expect(result.blob.type).toBe("image/png");
+    expect(result.width).toBe(2);
+    expect(result.height).toBe(1);
+    expect(cutOut).toHaveBeenCalledTimes(1);
+    expect(self.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "progress",
+        progress: 24,
+        message: "Preparing image for local object selection",
+      }),
+    );
+    expect(self.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "progress",
+        progress: 54,
+        message: "Mocked object selector",
+      }),
+    );
+    expect(self.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "progress",
+        progress: 92,
+        message: "Encoding selected object",
       }),
     );
   });

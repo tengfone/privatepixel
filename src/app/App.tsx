@@ -28,6 +28,7 @@ import {
   createDefaultMetadataOptions,
   createDefaultRemoveBackgroundOptions,
   createDefaultResizeOptions,
+  createObjectSelectOptions,
   getDefaultOutputMime,
   getMimeLabel,
   getOutputSizeDelta,
@@ -38,6 +39,10 @@ import {
   canProcessMetadata,
   getEffectiveMetadataOptions,
   getMetadataFormatSupport,
+  inspectMetadataSource,
+  type MetadataEditableTarget,
+  type MetadataInspectionEntry,
+  type MetadataInspectionResult,
 } from "../image/metadata";
 import type {
   CompressOptions,
@@ -49,6 +54,7 @@ import type {
   ImageOperation,
   ImageTool,
   MetadataOptions,
+  ObjectSelectPoint,
   OutputMimeType,
   ProcessedImageResult,
   RemoveBackgroundMode,
@@ -93,6 +99,26 @@ interface SizePreviewState {
   error?: string;
 }
 
+type MetadataInspectionStatus = "idle" | "ready" | "error";
+
+interface MetadataInspectionState {
+  assetId?: string;
+  status: MetadataInspectionStatus;
+  result?: MetadataInspectionResult;
+  error?: string;
+}
+
+type ObjectSelectionStatus = "idle" | "working" | "ready" | "error";
+
+interface ObjectSelectionState {
+  assetId: string;
+  point: ObjectSelectPoint;
+  status: ObjectSelectionStatus;
+  message: string;
+  maskUrl?: string;
+  error?: string;
+}
+
 interface CropPercentOptions {
   x: number;
   y: number;
@@ -109,6 +135,7 @@ const TOOL_LABELS: Record<AvailableImageTool, string> = {
   convert: "Convert",
   crop: "Crop",
   metadata: "Metadata",
+  "object-select": "Object Select",
   "remove-background": "Remove BG",
 };
 
@@ -118,6 +145,7 @@ const TOOL_COPY: Record<AvailableImageTool, string> = {
   convert: "Choose a target image format.",
   crop: "Drag, zoom, rotate, and export the selected area.",
   metadata: "Inspect, clean, and edit metadata without uploading the file.",
+  "object-select": "Click something in the image, then cut it out.",
   "remove-background": "Create a transparent PNG with local background removal.",
 };
 
@@ -142,6 +170,19 @@ const REMOVE_BACKGROUND_MODE_COPY: Record<
     detail: "Runs the routed model and fallback, then keeps the cleaner mask.",
   },
 };
+
+type MetadataTextFieldKey = keyof MetadataOptions["fields"];
+
+const METADATA_TEXT_FIELD_CONTROLS: Array<{
+  field: MetadataTextFieldKey;
+  label: string;
+}> = [
+  { field: "title", label: "Title" },
+  { field: "description", label: "Description" },
+  { field: "creator", label: "Creator" },
+  { field: "copyright", label: "Copyright" },
+  { field: "keywords", label: "Keywords" },
+];
 
 const CROP_ASPECTS: Record<Exclude<CropAspect, "original">, number> = {
   "1:1": 1,
@@ -255,14 +296,20 @@ export function App() {
   const [concurrency, setConcurrency] = useState(2);
   const [notice, setNotice] = useState("Images stay in this browser session.");
   const [sizePreview, setSizePreview] = useState<SizePreviewState>(EMPTY_SIZE_PREVIEW);
+  const [objectSelection, setObjectSelection] = useState<ObjectSelectionState | null>(
+    null,
+  );
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
   const workerRef = useRef<ImageWorkerClient | null>(null);
   const runTokenRef = useRef(0);
+  const objectSelectionTokenRef = useRef(0);
+  const objectSelectionJobIdRef = useRef<string | null>(null);
   const activeJobIdsRef = useRef(new Set<string>());
   const assetUrlsRef = useRef(new Set<string>());
   const resultUrlsRef = useRef(new Set<string>());
+  const selectionUrlsRef = useRef(new Set<string>());
 
   const selectedAsset = useMemo(
     () => assets.find((asset) => asset.id === selectedAssetId) ?? assets[0],
@@ -276,13 +323,19 @@ export function App() {
         .filter((result): result is ToolProcessedImageResult => Boolean(result)),
     [assets, jobs],
   );
+  const currentObjectSelection =
+    selectedAsset && objectSelection?.assetId === selectedAsset.id
+      ? objectSelection
+      : undefined;
   const activeToolCannotRun =
     activeTool === "metadata" && selectedAsset
       ? !canProcessMetadata(
           selectedAsset.mimeType,
           getEffectiveMetadataOptions(selectedAsset.mimeType, metadataOptions),
         )
-      : false;
+      : activeTool === "object-select"
+        ? currentObjectSelection?.status !== "ready"
+        : false;
 
   const sizePreviewKey = useMemo(
     () =>
@@ -321,6 +374,35 @@ export function App() {
       };
     }
 
+    if (activeTool === "object-select") {
+      if (currentObjectSelection?.status === "working") {
+        return {
+          status: "working",
+          message: currentObjectSelection.message,
+        };
+      }
+
+      if (currentObjectSelection?.status === "ready") {
+        return {
+          status: "idle",
+          message: "Selection ready. Cut it out when you are happy.",
+        };
+      }
+
+      if (currentObjectSelection?.status === "error") {
+        return {
+          status: "error",
+          message: "Could not select that object.",
+          error: currentObjectSelection.error,
+        };
+      }
+
+      return {
+        status: "idle",
+        message: "Click the object you want to cut out.",
+      };
+    }
+
     if (
       activeTool === "metadata" &&
       !canProcessMetadata(
@@ -352,6 +434,7 @@ export function App() {
     return sizePreview;
   }, [
     activeTool,
+    currentObjectSelection,
     isProcessing,
     metadataOptions,
     selectedAsset,
@@ -363,6 +446,7 @@ export function App() {
     const activeJobIds = activeJobIdsRef.current;
     const assetUrls = assetUrlsRef.current;
     const resultUrls = resultUrlsRef.current;
+    const selectionUrls = selectionUrlsRef.current;
 
     return () => {
       const worker = workerRef.current;
@@ -374,6 +458,9 @@ export function App() {
         URL.revokeObjectURL(url);
       }
       for (const url of resultUrls) {
+        URL.revokeObjectURL(url);
+      }
+      for (const url of selectionUrls) {
         URL.revokeObjectURL(url);
       }
     };
@@ -412,6 +499,29 @@ export function App() {
         },
       };
     });
+  }
+
+  function replaceObjectSelection(selection: ObjectSelectionState | null): void {
+    setObjectSelection((current) => {
+      if (current?.maskUrl) {
+        selectionUrlsRef.current.delete(current.maskUrl);
+        URL.revokeObjectURL(current.maskUrl);
+      }
+
+      return selection;
+    });
+  }
+
+  function clearObjectSelection(): void {
+    objectSelectionTokenRef.current += 1;
+    const jobId = objectSelectionJobIdRef.current;
+    if (jobId) {
+      workerRef.current?.cancel(jobId);
+      activeJobIdsRef.current.delete(jobId);
+      objectSelectionJobIdRef.current = null;
+    }
+    replaceObjectSelection(null);
+    setNotice("Selection cleared.");
   }
 
   async function importFiles(fileList: FileList | File[]): Promise<void> {
@@ -539,6 +649,21 @@ export function App() {
         };
       }
 
+      if (activeTool === "object-select") {
+        if (
+          !objectSelection ||
+          objectSelection.assetId !== asset.id ||
+          objectSelection.status !== "ready"
+        ) {
+          throw new Error("Click an object before cutting it out.");
+        }
+
+        return {
+          type: "object-select",
+          options: createObjectSelectOptions(objectSelection.point, "cutout"),
+        };
+      }
+
       return {
         type: "remove-background",
         options: removeBackgroundOptions,
@@ -550,6 +675,7 @@ export function App() {
       convertOptions,
       cropPercent,
       metadataOptions,
+      objectSelection,
       removeBackgroundOptions,
       resizeOptions,
     ],
@@ -559,6 +685,7 @@ export function App() {
     if (
       !selectedAsset ||
       activeTool === "remove-background" ||
+      activeTool === "object-select" ||
       (activeTool === "metadata" &&
         !canProcessMetadata(
           selectedAsset.mimeType,
@@ -676,6 +803,109 @@ export function App() {
     });
   }
 
+  async function selectObjectAtPoint(point: ObjectSelectPoint): Promise<void> {
+    if (!selectedAsset) {
+      return;
+    }
+
+    const previousJobId = objectSelectionJobIdRef.current;
+    if (previousJobId) {
+      workerRef.current?.cancel(previousJobId);
+      activeJobIdsRef.current.delete(previousJobId);
+    }
+
+    const token = objectSelectionTokenRef.current + 1;
+    objectSelectionTokenRef.current = token;
+    const jobId = crypto.randomUUID();
+    objectSelectionJobIdRef.current = jobId;
+    activeJobIdsRef.current.add(jobId);
+    replaceObjectSelection({
+      assetId: selectedAsset.id,
+      point,
+      status: "working",
+      message: "Finding selected object locally.",
+    });
+    setNotice("Finding the object you clicked. This stays local.");
+
+    try {
+      const buffer = await selectedAsset.file.arrayBuffer();
+      if (objectSelectionTokenRef.current !== token) {
+        return;
+      }
+
+      const request: ImageJobRequest = {
+        jobId,
+        assetId: selectedAsset.id,
+        source: {
+          name: selectedAsset.name,
+          mimeType: selectedAsset.mimeType,
+          size: selectedAsset.size,
+          width: selectedAsset.width,
+          height: selectedAsset.height,
+          buffer,
+        },
+        operation: {
+          type: "object-select",
+          options: createObjectSelectOptions(point, "mask"),
+        },
+      };
+
+      const result = await getWorker().process(request, (progress) => {
+        if (objectSelectionTokenRef.current !== token) {
+          return;
+        }
+
+        setObjectSelection((current) =>
+          current?.assetId === selectedAsset.id
+            ? {
+                ...current,
+                status: "working",
+                message: progress.message,
+              }
+            : current,
+        );
+      });
+      if (objectSelectionTokenRef.current !== token) {
+        return;
+      }
+
+      const maskUrl = URL.createObjectURL(result.blob);
+      selectionUrlsRef.current.add(maskUrl);
+      replaceObjectSelection({
+        assetId: selectedAsset.id,
+        point,
+        status: "ready",
+        message: "Selection ready.",
+        maskUrl,
+      });
+      setNotice("Selection ready. Cut it out when you are happy.");
+    } catch (error) {
+      if (objectSelectionTokenRef.current !== token) {
+        return;
+      }
+
+      const message =
+        error instanceof Error ? error.message : "Object selection failed.";
+      if (message === "Job canceled") {
+        return;
+      }
+
+      replaceObjectSelection({
+        assetId: selectedAsset.id,
+        point,
+        status: "error",
+        message: "Could not select that object.",
+        error: message,
+      });
+      setNotice("Could not select that object.");
+    } finally {
+      activeJobIdsRef.current.delete(jobId);
+      if (objectSelectionJobIdRef.current === jobId) {
+        objectSelectionJobIdRef.current = null;
+      }
+    }
+  }
+
   async function processAsset(asset: ImageAsset, runToken: number): Promise<void> {
     const jobId = crypto.randomUUID();
     activeJobIdsRef.current.add(jobId);
@@ -732,18 +962,31 @@ export function App() {
       return;
     }
 
+    if (activeToolCannotRun) {
+      setNotice(
+        activeTool === "object-select"
+          ? "Click an object in the selected image first."
+          : "This tool cannot run for the selected image.",
+      );
+      return;
+    }
+
+    const runAssets =
+      activeTool === "object-select" && selectedAsset ? [selectedAsset] : assets;
     const runToken = runTokenRef.current + 1;
     runTokenRef.current = runToken;
     setIsProcessing(true);
     setNotice(
       activeTool === "remove-background"
         ? "Running Remove BG locally. Models load on first use."
-        : `Running ${TOOL_LABELS[activeTool].toLowerCase()} locally.`,
+        : activeTool === "object-select"
+          ? "Cutting out the selected object locally."
+          : `Running ${TOOL_LABELS[activeTool].toLowerCase()} locally.`,
     );
 
     setJobs((current) => {
       const next = { ...current };
-      for (const asset of assets) {
+      for (const asset of runAssets) {
         next[asset.id] = {
           ...getJobView(current, asset.id),
           status: "queued",
@@ -757,13 +1000,13 @@ export function App() {
 
     let cursor = 0;
     const workerCount =
-      activeTool === "remove-background"
+      activeTool === "remove-background" || activeTool === "object-select"
         ? 1
-        : Math.min(Math.max(1, concurrency), assets.length);
+        : Math.min(Math.max(1, concurrency), runAssets.length);
 
     async function consumeQueue(): Promise<void> {
       while (runTokenRef.current === runToken) {
-        const asset = assets[cursor];
+        const asset = runAssets[cursor];
         cursor += 1;
 
         if (!asset) {
@@ -923,9 +1166,11 @@ export function App() {
               cropPosition={cropPosition}
               cropZoom={cropZoom}
               cropRotation={cropPercent.rotation}
+              objectSelection={currentObjectSelection}
               onResizeChange={setResizeOptions}
               onResizeViewZoomChange={setResizeViewZoom}
               onPreviewViewZoomChange={setPreviewViewZoom}
+              onObjectSelectPoint={(point) => void selectObjectAtPoint(point)}
               onCropPositionChange={setCropPosition}
               onCropZoomChange={setCropZoom}
               onCropRotationChange={(rotation) =>
@@ -1001,6 +1246,13 @@ export function App() {
             />
           ) : null}
 
+          {activeTool === "object-select" ? (
+            <ObjectSelectControls
+              selection={currentObjectSelection}
+              onClear={clearObjectSelection}
+            />
+          ) : null}
+
           {activeTool === "remove-background" ? (
             <RemoveBackgroundControls
               options={removeBackgroundOptions}
@@ -1014,8 +1266,14 @@ export function App() {
             <label>
               Batch speed
               <select
-                value={activeTool === "remove-background" ? 1 : concurrency}
-                disabled={activeTool === "remove-background"}
+                value={
+                  activeTool === "remove-background" || activeTool === "object-select"
+                    ? 1
+                    : concurrency
+                }
+                disabled={
+                  activeTool === "remove-background" || activeTool === "object-select"
+                }
                 aria-describedby="batch-speed-note"
                 onChange={(event) => setConcurrency(Number(event.target.value))}
               >
@@ -1026,7 +1284,9 @@ export function App() {
             <p id="batch-speed-note" className="runbar-note">
               {activeTool === "remove-background"
                 ? "Remove BG works on one image at a time to keep local model memory stable."
-                : "Faster works on two images at once. Safer works on one."}
+                : activeTool === "object-select"
+                  ? "Object Select works on the image you clicked."
+                  : "Faster works on two images at once. Safer works on one."}
             </p>
             <button
               type="button"
@@ -1034,7 +1294,9 @@ export function App() {
               disabled={isProcessing || !assets.length || activeToolCannotRun}
               data-testid="run-tool"
             >
-              Run {TOOL_LABELS[activeTool]}
+              {activeTool === "object-select"
+                ? "Cut Out Selection"
+                : `Run ${TOOL_LABELS[activeTool]}`}
             </button>
             <button
               className="secondary"
@@ -1146,9 +1408,11 @@ interface EditorStageProps {
   cropPosition: Point;
   cropZoom: number;
   cropRotation: number;
+  objectSelection?: ObjectSelectionState;
   onResizeChange: (options: ResizeOptions) => void;
   onResizeViewZoomChange: (zoom: number) => void;
   onPreviewViewZoomChange: (zoom: number) => void;
+  onObjectSelectPoint: (point: ObjectSelectPoint) => void;
   onCropPositionChange: (position: Point) => void;
   onCropZoomChange: (zoom: number) => void;
   onCropRotationChange: (rotation: number) => void;
@@ -1166,9 +1430,11 @@ function EditorStage({
   cropPosition,
   cropZoom,
   cropRotation,
+  objectSelection,
   onResizeChange,
   onResizeViewZoomChange,
   onPreviewViewZoomChange,
+  onObjectSelectPoint,
   onCropPositionChange,
   onCropZoomChange,
   onCropRotationChange,
@@ -1219,6 +1485,9 @@ function EditorStage({
       asset={asset}
       result={result}
       viewZoom={previewViewZoom}
+      isObjectSelectActive={activeTool === "object-select"}
+      objectSelection={objectSelection}
+      onObjectSelectPoint={onObjectSelectPoint}
       onViewZoomChange={onPreviewViewZoomChange}
     />
   );
@@ -1228,6 +1497,9 @@ interface PreviewStageProps {
   asset: ImageAsset;
   result?: ProcessedImageResult;
   viewZoom: number;
+  isObjectSelectActive: boolean;
+  objectSelection?: ObjectSelectionState;
+  onObjectSelectPoint: (point: ObjectSelectPoint) => void;
   onViewZoomChange: (zoom: number) => void;
 }
 
@@ -1235,10 +1507,14 @@ function PreviewStage({
   asset,
   result,
   viewZoom,
+  isObjectSelectActive,
+  objectSelection,
+  onObjectSelectPoint,
   onViewZoomChange,
 }: PreviewStageProps) {
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
+  const sourceImageRef = useRef<HTMLImageElement | null>(null);
   const dragStartRef = useRef<{
     pointerId: number;
     origin: Point;
@@ -1280,27 +1556,61 @@ function PreviewStage({
     });
   }
 
-  function endPan(event: PointerEvent<HTMLElement>): void {
+  function maybeSelectObject(event: PointerEvent<HTMLElement>): void {
+    const image = sourceImageRef.current;
+    if (!isObjectSelectActive || !image) {
+      return;
+    }
+
+    const rect = image.getBoundingClientRect();
+    const rawX = (event.clientX - rect.left) / rect.width;
+    const rawY = (event.clientY - rect.top) / rect.height;
+    if (rawX < 0 || rawX > 1 || rawY < 0 || rawY > 1) {
+      return;
+    }
+
+    onObjectSelectPoint({
+      x: clampValue(rawX, 0, 1),
+      y: clampValue(rawY, 0, 1),
+    });
+  }
+
+  function endPan(event: PointerEvent<HTMLElement>, isSource = false): void {
     const dragStart = dragStartRef.current;
     if (!dragStart || dragStart.pointerId !== event.pointerId) {
       return;
     }
 
+    const dragDistance = Math.hypot(
+      event.clientX - dragStart.origin.x,
+      event.clientY - dragStart.origin.y,
+    );
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     dragStartRef.current = null;
     setIsPanning(false);
+    if (isSource && dragDistance <= 4) {
+      maybeSelectObject(event);
+    }
   }
 
-  function renderPreviewFigure(src: string, alt: string) {
+  function renderPreviewFigure(src: string, alt: string, isSource = false) {
+    const visibleObjectSelection =
+      isSource && isObjectSelectActive ? objectSelection : undefined;
+
     return (
       <figure
-        className={isPanning ? "is-panning" : undefined}
+        className={[
+          isPanning ? "is-panning" : "",
+          isSource && isObjectSelectActive ? "is-object-selectable" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
         onPointerDown={startPan}
         onPointerMove={updatePan}
-        onPointerUp={endPan}
-        onPointerCancel={endPan}
+        onPointerUp={(event) => endPan(event, isSource)}
+        onPointerCancel={(event) => endPan(event)}
       >
         <div
           className={`preview-canvas ${isPanning ? "is-panning" : ""}`}
@@ -1308,7 +1618,29 @@ function PreviewStage({
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${viewZoom})`,
           }}
         >
-          <img src={src} alt={alt} />
+          <div className="preview-image-stack">
+            <img ref={isSource ? sourceImageRef : undefined} src={src} alt={alt} />
+            {visibleObjectSelection?.maskUrl ? (
+              <img
+                className="selection-mask"
+                src={visibleObjectSelection.maskUrl}
+                alt=""
+                aria-hidden="true"
+              />
+            ) : null}
+            {visibleObjectSelection ? (
+              <span
+                className={`selection-click-dot ${
+                  visibleObjectSelection.status === "working" ? "is-working" : ""
+                }`}
+                style={{
+                  left: `${visibleObjectSelection.point.x * 100}%`,
+                  top: `${visibleObjectSelection.point.y * 100}%`,
+                }}
+                aria-hidden="true"
+              />
+            ) : null}
+          </div>
         </div>
       </figure>
     );
@@ -1339,7 +1671,7 @@ function PreviewStage({
           Fit
         </button>
       </div>
-      {renderPreviewFigure(asset.previewUrl, `Selected ${asset.name}`)}
+      {renderPreviewFigure(asset.previewUrl, `Selected ${asset.name}`, true)}
       {result ? renderPreviewFigure(result.url, `Processed ${asset.name}`) : null}
       <StageMeta asset={asset} result={result} />
     </div>
@@ -1823,6 +2155,58 @@ function CropControls({
   );
 }
 
+interface ObjectSelectControlsProps {
+  selection?: ObjectSelectionState;
+  onClear: () => void;
+}
+
+function ObjectSelectControls({ selection, onClear }: ObjectSelectControlsProps) {
+  return (
+    <div className="control-stack">
+      <div className="runtime-note runtime-note-ready">
+        <p className="eyebrow">Local only</p>
+        <h3>Click an object</h3>
+        <p>
+          Click one thing in the image. PrivatePixel highlights it before creating the
+          transparent PNG.
+        </p>
+      </div>
+      <div className="runtime-note">
+        <p className="eyebrow">
+          {selection?.status === "ready"
+            ? "Selection ready"
+            : selection?.status === "working"
+              ? "Selecting"
+              : selection?.status === "error"
+                ? "Try again"
+                : "No selection"}
+        </p>
+        <h3>
+          {selection?.status === "ready"
+            ? "Cutout ready"
+            : selection?.status === "working"
+              ? "Finding edges"
+              : "Click the preview"}
+        </h3>
+        <p>
+          {selection?.status === "ready"
+            ? "Run the cutout, or click another spot to refine the selection."
+            : selection?.status === "working"
+              ? selection.message
+              : selection?.status === "error"
+                ? selection.error
+                : "Choose the shoe, mug, person, logo, or object you want."}
+        </p>
+        {selection ? (
+          <button type="button" className="secondary" onClick={onClear}>
+            Clear selection
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 interface RemoveBackgroundControlsProps {
   options: RemoveBackgroundOptions;
   onChange: (options: RemoveBackgroundOptions) => void;
@@ -1875,14 +2259,199 @@ interface MetadataControlsProps {
   onChange: (options: MetadataOptions) => void;
 }
 
+function groupMetadataEntries(
+  entries: MetadataInspectionEntry[],
+): Array<[string, MetadataInspectionEntry[]]> {
+  const groups = new Map<string, MetadataInspectionEntry[]>();
+  for (const entry of entries) {
+    const current = groups.get(entry.group) ?? [];
+    current.push(entry);
+    groups.set(entry.group, current);
+  }
+  return Array.from(groups.entries());
+}
+
+function customMetadataFieldIndex(
+  fields: MetadataOptions["customTextFields"],
+  key: string,
+): number {
+  const normalizedKey = key.trim().toLowerCase();
+  return fields.findIndex((field) => field.key.trim().toLowerCase() === normalizedKey);
+}
+
+function mergeMetadataInspectionValues(
+  options: MetadataOptions,
+  inspection: MetadataInspectionResult,
+  overwriteExisting: boolean,
+): MetadataOptions {
+  const fields = { ...options.fields };
+  const customTextFields = [...options.customTextFields];
+
+  for (const entry of inspection.entries) {
+    if (!entry.editable || !entry.target) {
+      continue;
+    }
+
+    if (entry.target.type === "field") {
+      if (overwriteExisting || !fields[entry.target.field].trim()) {
+        fields[entry.target.field] = entry.value;
+      }
+      continue;
+    }
+
+    const key = entry.target.key.trim();
+    if (!key) {
+      continue;
+    }
+
+    const existingIndex = customMetadataFieldIndex(customTextFields, key);
+    if (existingIndex >= 0) {
+      if (overwriteExisting) {
+        customTextFields[existingIndex] = {
+          ...customTextFields[existingIndex],
+          value: entry.value,
+        };
+      }
+      continue;
+    }
+
+    customTextFields.push({ key, value: entry.value });
+  }
+
+  return {
+    ...options,
+    fields,
+    customTextFields,
+  };
+}
+
+function metadataTargetValue(
+  target: MetadataEditableTarget,
+  fallback: string,
+  options: MetadataOptions,
+  isEditing: boolean,
+): string {
+  if (target.type === "field") {
+    return isEditing ? options.fields[target.field] : fallback;
+  }
+
+  const existing = options.customTextFields.find(
+    (field) => field.key.trim().toLowerCase() === target.key.trim().toLowerCase(),
+  );
+  return existing ? existing.value : fallback;
+}
+
 function MetadataControls({ asset, options, onChange }: MetadataControlsProps) {
+  const [inspectionState, setInspectionState] = useState<MetadataInspectionState>({
+    status: "idle",
+  });
+  const latestMetadataOptionsRef = useRef(options);
+  const latestOnChangeRef = useRef(onChange);
   const support = getMetadataFormatSupport(asset?.mimeType ?? "");
   const effectiveOptions = asset
     ? getEffectiveMetadataOptions(asset.mimeType, options)
     : options;
   const canWrite = support.canClean || support.canEditText;
+  const isEditing = support.canEditText && effectiveOptions.mode === "edit";
+  const inspectionResult =
+    asset && inspectionState.assetId === asset.id ? inspectionState.result : undefined;
+  const inspectionError =
+    asset && inspectionState.assetId === asset.id ? inspectionState.error : undefined;
+  const inspectionStatus =
+    !asset || inspectionState.assetId === asset.id ? inspectionState.status : "working";
+  const metadataGroups = useMemo(
+    () => groupMetadataEntries(inspectionResult?.entries ?? []),
+    [inspectionResult],
+  );
+  const inspectedTextFields = useMemo(() => {
+    const fields = new Set<MetadataTextFieldKey>();
+    for (const entry of inspectionResult?.entries ?? []) {
+      if (entry.editable && entry.target?.type === "field") {
+        fields.add(entry.target.field);
+      }
+    }
+    return fields;
+  }, [inspectionResult]);
+  const additionalTextFields = METADATA_TEXT_FIELD_CONTROLS.filter(
+    (control) => !inspectedTextFields.has(control.field),
+  );
 
-  function updateField(field: keyof MetadataOptions["fields"], value: string): void {
+  useEffect(() => {
+    latestMetadataOptionsRef.current = options;
+    latestOnChangeRef.current = onChange;
+  }, [options, onChange]);
+
+  useEffect(() => {
+    if (!asset) {
+      return;
+    }
+
+    const inspectedAsset = asset;
+    let stale = false;
+
+    async function inspectAssetMetadata(): Promise<void> {
+      try {
+        const buffer = await inspectedAsset.file.arrayBuffer();
+        if (stale) {
+          return;
+        }
+
+        const result = inspectMetadataSource({
+          name: inspectedAsset.name,
+          mimeType: inspectedAsset.mimeType,
+          size: inspectedAsset.size,
+          width: inspectedAsset.width,
+          height: inspectedAsset.height,
+          buffer,
+        });
+
+        setInspectionState({
+          assetId: inspectedAsset.id,
+          status: "ready",
+          result,
+        });
+
+        const latestOptions = latestMetadataOptionsRef.current;
+        if (latestOptions.mode === "edit") {
+          latestOnChangeRef.current(
+            mergeMetadataInspectionValues(latestOptions, result, true),
+          );
+        }
+      } catch (error) {
+        if (stale) {
+          return;
+        }
+
+        setInspectionState({
+          assetId: inspectedAsset.id,
+          status: "error",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Could not read existing metadata.",
+        });
+      }
+    }
+
+    void inspectAssetMetadata();
+
+    return () => {
+      stale = true;
+    };
+  }, [asset]);
+
+  function updateMode(mode: MetadataOptions["mode"]): void {
+    const seededOptions =
+      mode === "edit" && inspectionResult
+        ? mergeMetadataInspectionValues(options, inspectionResult, true)
+        : options;
+    onChange({
+      ...seededOptions,
+      mode,
+    });
+  }
+
+  function updateField(field: MetadataTextFieldKey, value: string): void {
     onChange({
       ...options,
       fields: {
@@ -1890,6 +2459,38 @@ function MetadataControls({ asset, options, onChange }: MetadataControlsProps) {
         [field]: value,
       },
     });
+  }
+
+  function updateCustomField(key: string, value: string): void {
+    const normalizedKey = key.trim();
+    if (!normalizedKey) {
+      return;
+    }
+
+    const customTextFields = [...options.customTextFields];
+    const existingIndex = customMetadataFieldIndex(customTextFields, normalizedKey);
+
+    if (existingIndex >= 0) {
+      customTextFields[existingIndex] = {
+        ...customTextFields[existingIndex],
+        value,
+      };
+    } else {
+      customTextFields.push({ key: normalizedKey, value });
+    }
+
+    onChange({
+      ...options,
+      customTextFields,
+    });
+  }
+
+  function updateTarget(target: MetadataEditableTarget, value: string): void {
+    if (target.type === "field") {
+      updateField(target.field, value);
+      return;
+    }
+    updateCustomField(target.key, value);
   }
 
   return (
@@ -1907,10 +2508,7 @@ function MetadataControls({ asset, options, onChange }: MetadataControlsProps) {
             <select
               value={effectiveOptions.mode}
               onChange={(event) =>
-                onChange({
-                  ...options,
-                  mode: event.target.value as MetadataOptions["mode"],
-                })
+                updateMode(event.target.value as MetadataOptions["mode"])
               }
             >
               <option value="clean" disabled={!support.canClean}>
@@ -1984,33 +2582,84 @@ function MetadataControls({ asset, options, onChange }: MetadataControlsProps) {
         </>
       ) : null}
 
-      {support.canEditText && effectiveOptions.mode === "edit" ? (
+      <section className="metadata-inspector" aria-live="polite">
+        <div className="metadata-inspector-heading">
+          <h4>Existing metadata</h4>
+          <p>
+            {inspectionStatus === "ready"
+              ? `${metadataGroups.reduce((total, [, entries]) => total + entries.length, 0)} fields found`
+              : inspectionStatus === "error"
+                ? "Could not read every field"
+                : asset
+                  ? "Reading local file"
+                  : "Add an image first"}
+          </p>
+        </div>
+
+        {inspectionStatus === "ready" && metadataGroups.length ? (
+          metadataGroups.map(([group, entries]) => (
+            <div className="metadata-group" key={group}>
+              <h5>{group}</h5>
+              <div className="metadata-entry-list">
+                {entries.map((entry) => {
+                  const canEditEntry = isEditing && entry.editable && entry.target;
+                  return (
+                    <article
+                      className={`metadata-entry ${canEditEntry ? "is-editable" : ""}`}
+                      key={entry.id}
+                    >
+                      <div className="metadata-entry-heading">
+                        <span>{entry.label}</span>
+                        <small>{canEditEntry ? "Editable" : "Read only"}</small>
+                      </div>
+                      {canEditEntry && entry.target ? (
+                        <TextAreaField
+                          label={entry.label}
+                          value={metadataTargetValue(
+                            entry.target,
+                            entry.value,
+                            options,
+                            isEditing,
+                          )}
+                          onChange={(value) => {
+                            if (entry.target) {
+                              updateTarget(entry.target, value);
+                            }
+                          }}
+                        />
+                      ) : (
+                        <p>{entry.value || "Empty"}</p>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          ))
+        ) : (
+          <p className="metadata-empty">
+            {inspectionStatus === "error"
+              ? inspectionError
+              : asset
+                ? "Reading existing metadata locally."
+                : "Metadata appears here after you load an image."}
+          </p>
+        )}
+      </section>
+
+      {support.canEditText &&
+      effectiveOptions.mode === "edit" &&
+      additionalTextFields.length ? (
         <div className="metadata-fields">
-          <TextField
-            label="Title"
-            value={options.fields.title}
-            onChange={(value) => updateField("title", value)}
-          />
-          <TextField
-            label="Description"
-            value={options.fields.description}
-            onChange={(value) => updateField("description", value)}
-          />
-          <TextField
-            label="Creator"
-            value={options.fields.creator}
-            onChange={(value) => updateField("creator", value)}
-          />
-          <TextField
-            label="Copyright"
-            value={options.fields.copyright}
-            onChange={(value) => updateField("copyright", value)}
-          />
-          <TextField
-            label="Keywords"
-            value={options.fields.keywords}
-            onChange={(value) => updateField("keywords", value)}
-          />
+          <p className="metadata-section-label">Add public text fields</p>
+          {additionalTextFields.map((control) => (
+            <TextField
+              key={control.field}
+              label={control.label}
+              value={options.fields[control.field]}
+              onChange={(value) => updateField(control.field, value)}
+            />
+          ))}
         </div>
       ) : null}
     </div>
@@ -2078,6 +2727,19 @@ function TextField({ label, value, onChange }: TextFieldProps) {
       <input
         type="text"
         value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function TextAreaField({ label, value, onChange }: TextFieldProps) {
+  return (
+    <label>
+      {label}
+      <textarea
+        value={value}
+        rows={value.length > 160 ? 6 : 3}
         onChange={(event) => onChange(event.target.value)}
       />
     </label>

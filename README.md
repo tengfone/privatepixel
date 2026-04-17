@@ -4,6 +4,44 @@
   <img src="public/assets/private_pixel.png" alt="PrivatePixel Logo" width="200" />
 </p>
 
+<p align="center">
+  <a href="https://github.com/tengfone/privatepixel/actions/workflows/deploy.yml">
+    <img
+      src="https://img.shields.io/github/actions/workflow/status/tengfone/privatepixel/deploy.yml?branch=main&style=for-the-badge&label=build&labelColor=000000&color=ff3000"
+      alt="Deploy status"
+    />
+  </a>
+  <img
+    src="https://img.shields.io/badge/privacy-local--only-ff3000?style=for-the-badge&labelColor=000000"
+    alt="Local-only privacy"
+  />
+  <img
+    src="https://img.shields.io/badge/no_uploads-no_servers-ff3000?style=for-the-badge&labelColor=000000"
+    alt="No uploads and no servers"
+  />
+  <img
+    src="https://img.shields.io/badge/static-GitHub_Pages-ff3000?style=for-the-badge&logo=githubpages&logoColor=ffffff&labelColor=000000"
+    alt="Static GitHub Pages app"
+  />
+  <img
+    src="https://img.shields.io/badge/Vite_%2B_React_%2B_TS-client_app-ff3000?style=for-the-badge&logo=vite&logoColor=ffffff&labelColor=000000"
+    alt="Vite React TypeScript"
+  />
+</p>
+
+<p align="center">
+  <img
+    src="public/assets/privatepixel-workspace.png"
+    alt="PrivatePixel workspace with a local image loaded"
+    width="960"
+  />
+</p>
+
+<p align="center">
+  <strong>Local image workspace:</strong> import queue, method controls, centered
+  preview stage, live output sizing, and browser-only export.
+</p>
+
 PrivatePixel is a browser-based image utility suite for local image editing. It
 lets users resize, compress, convert, crop, preview output size, and export images
 entirely on their own device.
@@ -34,10 +72,12 @@ Workers, and narrow WASM-ready processing boundaries.
   and output format controls.
 - Metadata tool with format-aware inspect, clean, and edit behavior for image
   containers that can be safely rewritten locally.
+- Object Select tool that lets the user click one object, preview the local mask,
+  and cut the selected object out as a transparent PNG.
 - Remove BG tool with local-only model routing, transparent PNG output, and an
   Advanced model selector.
 - Centered preview stage with zoom controls for preview, compress, convert, and
-  remove-background views.
+  object-selection and remove-background views.
 - Live output size preview that locally encodes the selected image after option
   changes and shows output bytes, percentage change, dimensions, format, and encode
   time.
@@ -89,6 +129,21 @@ the same metadata model.
 Metadata jobs rewrite the image container directly where supported, so pixels are
 not re-encoded for metadata-only edits.
 
+## Object Selection
+
+The Object Select tool runs MediaPipe Interactive Segmenter locally in a Web
+Worker. Selecting the tool does not load the model. The model loads only after
+the user clicks a point in the selected image.
+
+The first pass is intentionally simple:
+
+- Click an object in the preview.
+- PrivatePixel highlights the selected object using a local mask.
+- Run the cutout to export a transparent PNG of that selected object.
+
+Object Select works on the current image, one selection at a time. Click another
+spot to refine the selection before creating the final PNG.
+
 ## Resize Presets
 
 The resize tool includes common target sizes:
@@ -126,6 +181,7 @@ Bundled local asset paths include:
 - `public/models/briaai/RMBG-1.4`
 - `public/models/Xenova/modnet`
 - `public/models/mediapipe/face_detector`
+- `public/models/mediapipe/interactive_segmenter`
 - `public/vendor/onnxruntime-web`
 - `public/vendor/mediapipe/tasks-vision`
 
@@ -149,7 +205,7 @@ inference API as a fallback.
 - `@huggingface/transformers` with local ONNX Runtime assets for browser
   background-removal inference
 - `@mediapipe/tasks-vision` with local MediaPipe assets for face-detection
-  routing
+  routing and click-to-select object segmentation
 - Rust/WASM scaffold for future hot paths
 - Vitest for unit tests
 - Playwright for browser flow tests
@@ -224,8 +280,8 @@ pnpm run wasm:test
 
 Unit tests cover image option logic such as resize dimension calculation, crop
 normalization, rotation helpers, MIME/extension mapping, quality clamping, resize
-presets, Remove BG defaults, model routing, alpha-mask composition, and mocked
-worker PNG output.
+presets, Remove BG defaults, model routing, alpha-mask composition,
+object-selection masks, and mocked worker PNG output.
 
 Playwright tests cover the browser workflow under the GitHub Pages-style base path:
 importing an image, verifying the live output size preview, applying a resize

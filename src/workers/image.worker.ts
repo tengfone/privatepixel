@@ -9,6 +9,7 @@ import {
 } from "../image/options";
 import createPica from "pica";
 import { loadLocalBackgroundRemovalRuntime } from "../features/background-removal/localBackgroundRemoval";
+import { loadLocalObjectSelectionRuntime } from "../features/object-selection/localObjectSelection";
 import { processMetadataSource } from "../image/metadata";
 import type {
   ImageJobFailure,
@@ -417,6 +418,54 @@ export async function processRemoveBackground(
   };
 }
 
+export async function processObjectSelect(
+  request: ImageJobRequest,
+  bitmap: ImageBitmap,
+): Promise<{ blob: Blob; width: number; height: number; mimeType: OutputMimeType }> {
+  if (request.operation.type !== "object-select") {
+    throw new Error("Invalid object selection operation.");
+  }
+
+  postProgress(request, 24, "Preparing image for local object selection");
+  const source = bitmapToImageData(bitmap);
+  cancellationRegistry.throwIfCanceled(request.jobId);
+
+  postProgress(request, 26, "Starting object selector");
+  const runtime = await loadLocalObjectSelectionRuntime();
+  cancellationRegistry.throwIfCanceled(request.jobId);
+
+  const image =
+    request.operation.options.action === "mask"
+      ? await runtime.createOverlay(source, {
+          point: request.operation.options.point,
+          onProgress: (progress, message) => postProgress(request, progress, message),
+          throwIfCanceled: () => cancellationRegistry.throwIfCanceled(request.jobId),
+        })
+      : await runtime.cutOut(source, {
+          point: request.operation.options.point,
+          onProgress: (progress, message) => postProgress(request, progress, message),
+          throwIfCanceled: () => cancellationRegistry.throwIfCanceled(request.jobId),
+        });
+  cancellationRegistry.throwIfCanceled(request.jobId);
+
+  postProgress(
+    request,
+    92,
+    request.operation.options.action === "mask"
+      ? "Encoding selection highlight"
+      : "Encoding selected object",
+  );
+  const canvas = imageDataToCanvas(image);
+  cancellationRegistry.throwIfCanceled(request.jobId);
+
+  return {
+    blob: await encodeCanvas(canvas, request.operation.options.outputMimeType, 1),
+    width: image.width,
+    height: image.height,
+    mimeType: request.operation.options.outputMimeType,
+  };
+}
+
 async function processRequest(request: ImageJobRequest): Promise<void> {
   const startedAt = performance.now();
   let bitmap: ImageBitmap | undefined;
@@ -452,7 +501,9 @@ async function processRequest(request: ImageJobRequest): Promise<void> {
                   ? processConvert(request, bitmap)
                   : request.operation.type === "crop"
                     ? processCrop(request, bitmap)
-                    : processRemoveBackground(request, bitmap);
+                    : request.operation.type === "object-select"
+                      ? processObjectSelect(request, bitmap)
+                      : processRemoveBackground(request, bitmap);
           })();
 
     cancellationRegistry.throwIfCanceled(request.jobId);

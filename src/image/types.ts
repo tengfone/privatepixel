@@ -4,6 +4,7 @@ export type ImageTool =
   | "convert"
   | "crop"
   | "metadata"
+  | "object-select"
   | "remove-background";
 
 export type OutputMimeType =
@@ -72,6 +73,19 @@ export interface RemoveBackgroundOptions {
   mode: RemoveBackgroundMode;
 }
 
+export type ObjectSelectAction = "mask" | "cutout";
+
+export interface ObjectSelectPoint {
+  x: number;
+  y: number;
+}
+
+export interface ObjectSelectOptions {
+  outputMimeType: "image/png";
+  action: ObjectSelectAction;
+  point: ObjectSelectPoint;
+}
+
 export type MetadataMode = "clean" | "edit";
 
 export interface MetadataTextFields {
@@ -82,9 +96,15 @@ export interface MetadataTextFields {
   keywords: string;
 }
 
+export interface MetadataCustomTextField {
+  key: string;
+  value: string;
+}
+
 export interface MetadataOptions {
   mode: MetadataMode;
   fields: MetadataTextFields;
+  customTextFields: MetadataCustomTextField[];
   removePrivateData: boolean;
   removeComments: boolean;
   preserveColorProfile: boolean;
@@ -97,6 +117,7 @@ export type ImageOperation =
   | { type: "convert"; options: ConvertOptions }
   | { type: "crop"; options: CropOptions }
   | { type: "metadata"; options: MetadataOptions }
+  | { type: "object-select"; options: ObjectSelectOptions }
   | { type: "remove-background"; options: RemoveBackgroundOptions };
 
 export interface ImageJobRequest {

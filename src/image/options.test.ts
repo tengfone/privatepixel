@@ -9,6 +9,7 @@ import {
   createCenteredCrop,
   createDefaultRemoveBackgroundOptions,
   createDefaultResizeOptions,
+  createObjectSelectOptions,
   createOutputFilename,
   getDefaultOutputMime,
   mimeToExtension,
@@ -217,6 +218,21 @@ describe("image option helpers", () => {
     expect(JSON.parse(JSON.stringify(options))).toEqual({
       outputMimeType: "image/png",
       mode: "general",
+    });
+  });
+
+  it("serializes object selection click options for worker requests", () => {
+    expect(
+      JSON.parse(
+        JSON.stringify(createObjectSelectOptions({ x: 1.2, y: -0.1 }, "mask")),
+      ),
+    ).toEqual({
+      outputMimeType: "image/png",
+      action: "mask",
+      point: {
+        x: 1,
+        y: 0,
+      },
     });
   });
 });

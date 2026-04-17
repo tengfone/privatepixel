@@ -85,6 +85,9 @@ test("imports an image and produces a resize result", async ({ page }) => {
 
   await page.getByRole("button", { name: /Metadata/ }).click();
   await expect(page.getByText("Format-aware metadata")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Existing metadata" })).toBeVisible();
+  await expect(page.getByText("File name")).toBeVisible();
+  await expect(page.getByText("No editable PNG metadata chunks found.")).toBeVisible();
   await page.getByLabel("Metadata mode").selectOption("edit");
   await page.getByRole("textbox", { name: "Title" }).fill("Local test image");
   await page.getByRole("button", { name: "Run Metadata" }).click();

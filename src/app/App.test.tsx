@@ -117,4 +117,35 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(workerConstructor).not.toHaveBeenCalled();
   });
+
+  it("shows Object Select as a click-first tool without loading a worker", async () => {
+    const workerConstructor = vi.fn();
+    class MockWorker {
+      constructor() {
+        workerConstructor();
+      }
+
+      addEventListener = vi.fn();
+      removeEventListener = vi.fn();
+      postMessage = vi.fn();
+      terminate = vi.fn();
+    }
+
+    vi.stubGlobal("Worker", MockWorker);
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: /Object Select/ }));
+
+    expect(screen.getByText("Click an object")).toBeInTheDocument();
+    expect(
+      screen.getByText("Choose the shoe, mug, person, logo, or object you want."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Object Select works on the image you clicked."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cut Out Selection" })).toBeDisabled();
+    expect(workerConstructor).not.toHaveBeenCalled();
+  });
 });
