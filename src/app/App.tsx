@@ -1175,6 +1175,7 @@ export function App() {
           <a className="active" href="#app">
             App
           </a>
+          <a href="#local-first">Local-first</a>
           <a href="#about">About</a>
         </nav>
         <div className="site-status" aria-live="polite">
@@ -1456,12 +1457,51 @@ export function App() {
       </section>
 
       <section
+        id="local-first"
+        className="local-proof-panel swiss-grid-pattern"
+        aria-labelledby="local-first-title"
+      >
+        <div className="local-proof-copy">
+          <p className="eyebrow">07. Local-first</p>
+          <h2 id="local-first-title">Don't take our word for it. Verify it.</h2>
+          <p>
+            PrivatePixel opens images in your browser, runs the work on this device,
+            and exports files only when you choose. No account. No server-side image
+            processing. No hidden upload step.
+          </p>
+        </div>
+
+        <div className="proof-steps" aria-label="Ways to verify PrivatePixel">
+          <article className="proof-step">
+            <span>01</span>
+            <h3>Watch the network tab</h3>
+            <p>Your image should not appear in request payloads while tools run.</p>
+          </article>
+          <article className="proof-step">
+            <span>02</span>
+            <h3>Read the source</h3>
+            <p>The app, workers, local models, and WebAssembly path are public.</p>
+          </article>
+        </div>
+
+        <div className="proof-actions" aria-label="Verification links">
+          <a
+            href="https://github.com/tengfone/privatepixel"
+            target="_blank"
+            rel="noreferrer"
+          >
+            View source on GitHub
+          </a>
+        </div>
+      </section>
+
+      <section
         id="about"
         className="about-panel swiss-diagonal"
         aria-labelledby="about-title"
       >
         <div>
-          <p className="eyebrow">07. About</p>
+          <p className="eyebrow">08. About</p>
           <h2 id="about-title">Private image work, kept local.</h2>
         </div>
         <div className="about-copy">
@@ -1471,13 +1511,6 @@ export function App() {
             paywalls, or watermarks.
           </p>
           <div className="about-links" aria-label="Project links">
-            <a
-              href="https://github.com/tengfone/privatepixel"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Original on GitHub
-            </a>
             <a href="https://tengfone.dev" target="_blank" rel="noreferrer">
               Made with love - tengfone.dev
             </a>
