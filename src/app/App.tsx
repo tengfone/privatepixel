@@ -10,12 +10,21 @@ import {
   useRef,
   useState,
 } from "react";
+import { BeforeAfterSlider } from "./BeforeAfterSlider";
 import {
   createImageAsset,
   formatBytes,
   formatDimensions,
   revokeImageAsset,
 } from "../image/assets";
+import {
+  IMAGE_FILE_ACCEPT,
+  UNSUPPORTED_IMPORT_MESSAGE,
+  describeImportResults,
+  isAcceptedImportFile,
+  isHeicFile,
+  prepareImportFile,
+} from "../image/heic";
 import { downloadBlob } from "../image/download";
 import {
   OUTPUT_MIME_TYPES,
@@ -32,7 +41,6 @@ import {
   getDefaultOutputMime,
   getMimeLabel,
   getOutputSizeDelta,
-  isSupportedInputMime,
   normalizeRotationDegrees,
 } from "../image/options";
 import {
@@ -606,25 +614,31 @@ export function App() {
   }
 
   async function importFiles(fileList: FileList | File[]): Promise<void> {
-    const files = Array.from(fileList).filter((file) =>
-      isSupportedInputMime(file.type),
-    );
+    const files = Array.from(fileList).filter((file) => isAcceptedImportFile(file));
 
     if (!files.length) {
-      setNotice("Add PNG, JPEG, WebP, GIF, BMP, or AVIF images.");
+      setNotice(UNSUPPORTED_IMPORT_MESSAGE);
       return;
     }
 
-    setNotice("Reading local image metadata.");
+    setNotice(
+      files.some((file) => isHeicFile(file))
+        ? "Decoding HEIC/HEIF locally."
+        : "Reading local image metadata.",
+    );
 
-    const settled = await Promise.allSettled(files.map(createImageAsset));
+    const settled = await Promise.allSettled(
+      files.map(async (file) => createImageAsset(await prepareImportFile(file))),
+    );
     const imported: ImageAsset[] = [];
-    const failed = settled.filter((entry) => entry.status === "rejected").length;
+    const failures: unknown[] = [];
 
     for (const entry of settled) {
       if (entry.status === "fulfilled") {
         imported.push(entry.value);
         assetUrlsRef.current.add(entry.value.previewUrl);
+      } else {
+        failures.push(entry.reason);
       }
     }
 
@@ -635,9 +649,10 @@ export function App() {
       setCropPercent(createCropPercentOptions(imported[0]));
     }
     setNotice(
-      failed
-        ? `Imported ${imported.length} image${imported.length === 1 ? "" : "s"}; ${failed} could not be decoded.`
-        : `Imported ${imported.length} image${imported.length === 1 ? "" : "s"} locally.`,
+      describeImportResults({
+        imported: imported.length,
+        failures,
+      }),
     );
   }
 
@@ -1214,7 +1229,7 @@ export function App() {
           <input
             data-testid="file-input"
             type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif,image/svg+xml"
+            accept={IMAGE_FILE_ACCEPT}
             multiple
             onChange={handleFileInput}
           />
@@ -1719,56 +1734,29 @@ function PreviewStage({
     }
   }
 
-  function renderPreviewFigure(src: string, alt: string, isSource = false) {
-    const visibleObjectSelection =
-      isSource && isObjectSelectActive ? objectSelection : undefined;
-
-    return (
-      <figure
-        className={[
-          isPanning ? "is-panning" : "",
-          isSource && isObjectSelectActive ? "is-object-selectable" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        onPointerDown={startPan}
-        onPointerMove={updatePan}
-        onPointerUp={(event) => endPan(event, isSource)}
-        onPointerCancel={(event) => endPan(event)}
-      >
-        <div
-          className={`preview-canvas ${isPanning ? "is-panning" : ""}`}
+  const objectOverlay =
+    isObjectSelectActive && objectSelection ? (
+      <>
+        {objectSelection.maskUrl ? (
+          <img
+            className="selection-mask"
+            src={objectSelection.maskUrl}
+            alt=""
+            aria-hidden="true"
+          />
+        ) : null}
+        <span
+          className={`selection-click-dot ${
+            objectSelection.status === "working" ? "is-working" : ""
+          }`}
           style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${viewZoom})`,
+            left: `${objectSelection.point.x * 100}%`,
+            top: `${objectSelection.point.y * 100}%`,
           }}
-        >
-          <div className="preview-image-stack">
-            <img ref={isSource ? sourceImageRef : undefined} src={src} alt={alt} />
-            {visibleObjectSelection?.maskUrl ? (
-              <img
-                className="selection-mask"
-                src={visibleObjectSelection.maskUrl}
-                alt=""
-                aria-hidden="true"
-              />
-            ) : null}
-            {visibleObjectSelection ? (
-              <span
-                className={`selection-click-dot ${
-                  visibleObjectSelection.status === "working" ? "is-working" : ""
-                }`}
-                style={{
-                  left: `${visibleObjectSelection.point.x * 100}%`,
-                  top: `${visibleObjectSelection.point.y * 100}%`,
-                }}
-                aria-hidden="true"
-              />
-            ) : null}
-          </div>
-        </div>
-      </figure>
-    );
-  }
+          aria-hidden="true"
+        />
+      </>
+    ) : null;
 
   return (
     <div
@@ -1795,8 +1783,46 @@ function PreviewStage({
           Fit
         </button>
       </div>
-      {renderPreviewFigure(asset.previewUrl, `Selected ${asset.name}`, true)}
-      {result ? renderPreviewFigure(result.url, `Processed ${asset.name}`) : null}
+      <figure
+        className={[
+          isPanning ? "is-panning" : "",
+          isObjectSelectActive ? "is-object-selectable" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        onPointerDown={startPan}
+        onPointerMove={updatePan}
+        onPointerUp={(event) => endPan(event, true)}
+        onPointerCancel={(event) => endPan(event)}
+      >
+        <div
+          className={`preview-canvas ${isPanning ? "is-panning" : ""}`}
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${viewZoom})`,
+          }}
+        >
+          {result ? (
+            <BeforeAfterSlider
+              beforeSrc={asset.previewUrl}
+              afterSrc={result.url}
+              beforeAlt={`Selected ${asset.name}`}
+              afterAlt={`Processed ${asset.name}`}
+              beforeImageRef={sourceImageRef}
+            >
+              {objectOverlay}
+            </BeforeAfterSlider>
+          ) : (
+            <div className="preview-image-stack">
+              <img
+                ref={sourceImageRef}
+                src={asset.previewUrl}
+                alt={`Selected ${asset.name}`}
+              />
+              {objectOverlay}
+            </div>
+          )}
+        </div>
+      </figure>
       <StageMeta asset={asset} result={result} />
     </div>
   );

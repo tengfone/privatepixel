@@ -1,7 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { heicTo } from "heic-to";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+
+vi.mock("heic-to", () => ({
+  heicTo: vi.fn(),
+}));
 
 let originalCreateObjectUrl: typeof URL.createObjectURL | undefined;
 let originalRevokeObjectUrl: typeof URL.revokeObjectURL | undefined;
@@ -62,6 +67,14 @@ describe("App", () => {
     expect(screen.getByRole("link", { name: "View source on GitHub" })).toHaveAttribute(
       "href",
       "https://github.com/tengfone/privatepixel",
+    );
+    expect(screen.getByTestId("file-input")).toHaveAttribute(
+      "accept",
+      expect.stringContaining("image/heic"),
+    );
+    expect(screen.getByTestId("file-input")).toHaveAttribute(
+      "accept",
+      expect.stringContaining(".heic"),
     );
   });
 
@@ -157,5 +170,56 @@ describe("App", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cut Out Selection" })).toBeDisabled();
     expect(workerConstructor).not.toHaveBeenCalled();
+  });
+
+  it("decodes a HEIC file locally and shows no compare slider before a result", async () => {
+    vi.mocked(heicTo).mockResolvedValue(
+      new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: "image/jpeg" }),
+    );
+    stubObjectUrls();
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async () => ({
+        width: 40,
+        height: 20,
+        close: vi.fn(),
+      })),
+    );
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.upload(
+      screen.getByTestId("file-input"),
+      new File([new Uint8Array([9])], "vacation.heic", { type: "" }),
+    );
+
+    expect(await screen.findAllByText("vacation.jpg")).not.toHaveLength(0);
+    expect(screen.getByText(/image\/jpeg/)).toBeInTheDocument();
+    expect(screen.queryByText(/Unsupported image type/)).not.toBeInTheDocument();
+    expect(heicTo).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: /Compress/ }));
+    expect(
+      screen.queryByRole("slider", { name: "Before and after" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByAltText("Selected vacation.jpg")).toBeInTheDocument();
+  });
+
+  it("reports a HEIC decode failure instead of an unsupported type", async () => {
+    vi.mocked(heicTo).mockRejectedValue(new Error("wasm failed"));
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.upload(
+      screen.getByTestId("file-input"),
+      new File([new Uint8Array([9])], "vacation.heic", { type: "image/heic" }),
+    );
+
+    expect(
+      await screen.findByText("HEIC/HEIF could not be decoded in this browser."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Unsupported image type/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Add PNG, JPEG/)).not.toBeInTheDocument();
   });
 });

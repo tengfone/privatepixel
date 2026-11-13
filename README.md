@@ -98,8 +98,9 @@ Input formats:
 - BMP
 - AVIF
 
-HEIC/HEIF is not supported yet. Apple HEIC files and Live Photo still-image assets
-need browser-safe decoding before they can enter the local pipeline.
+HEIC/HEIF is decoded locally in the browser and then edited like any other image.
+Apple HEIC files and Live Photo stills are converted to JPEG on this device before
+they enter the rest of the pipeline.
 
 Output formats:
 

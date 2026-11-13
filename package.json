@@ -21,6 +21,7 @@
   "dependencies": {
     "@huggingface/transformers": "^4.1.0",
     "@mediapipe/tasks-vision": "^0.10.34",
+    "heic-to": "1.6.7",
     "pica": "^9.0.1",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
