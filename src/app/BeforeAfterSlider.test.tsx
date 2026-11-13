@@ -87,6 +87,7 @@ describe("BeforeAfterSlider", () => {
     fireEvent.pointerDown(slider(), { clientX: 150, pointerId: 1, button: 0 });
 
     expect(parentPointerDown).not.toHaveBeenCalled();
+    expect(slider()).toHaveFocus();
     expect(slider()).toHaveAttribute("aria-valuenow", "75");
   });
 });
