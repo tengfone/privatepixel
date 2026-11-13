@@ -104,9 +104,8 @@ export function BeforeAfterSlider({
       return;
     }
 
+    event.currentTarget.focus({ preventScroll: true });
     event.stopPropagation();
-    event.preventDefault();
-    event.currentTarget.focus();
     draggingRef.current = true;
     setDragging(true);
     capturePointer(event.currentTarget, event.pointerId);
