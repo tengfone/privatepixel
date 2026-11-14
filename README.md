@@ -97,10 +97,24 @@ Input formats:
 - GIF
 - BMP
 - AVIF
+- HEIC/HEIF (decoded on this device; see below)
 
-HEIC/HEIF is decoded locally in the browser and then edited like any other image.
-Apple HEIC files and Live Photo stills are converted to JPEG on this device before
-they enter the rest of the pipeline.
+HEIC/HEIF files are decoded locally and then edited like any other image:
+
+- Safari and other browsers with a system HEIC decoder decode the file directly.
+  Elsewhere PrivatePixel lazy-loads [heic-to](https://github.com/hoppergee/heic-to)
+  (libheif + libde265 compiled to WebAssembly, about 3 MB) the first time a HEIC
+  file is imported. Nothing is uploaded either way.
+- The decoded pixels become a lossless PNG working copy, so tools encode once from
+  full-quality pixels. The default output format for a HEIC photo is JPEG.
+- Output file names keep the original stem (`photo.heic` becomes
+  `photo-compress.jpg`), and size changes are measured against the original HEIC.
+- Files are decoded one at a time to keep memory stable with large batches.
+- Only the primary image is imported. Bursts, image sequences, depth maps, and
+  other auxiliary images in the same container are ignored.
+- EXIF/GPS metadata, the embedded colour profile (for example Display P3), and
+  HDR/gain-map data are not carried over. The app says so when a HEIC file is
+  imported.
 
 Output formats:
 
@@ -209,6 +223,12 @@ WebGPU first when available and falls back to WASM; MODNet currently uses WASM.
 Remove BG works on one image at a time to avoid duplicate large model loads and
 browser memory spikes. The app does not call a remote image-processing or
 inference API as a fallback.
+
+## Third-Party Notices
+
+HEIC decoding uses heic-to, libheif, and libde265, which are licensed under the
+LGPL-3.0. See [public/THIRD_PARTY_NOTICES.txt](public/THIRD_PARTY_NOTICES.txt),
+which is also served with the app and linked from its About section.
 
 ## Stack
 

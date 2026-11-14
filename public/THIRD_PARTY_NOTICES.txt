@@ -1,0 +1,53 @@
+PrivatePixel - third-party notices
+==================================
+
+This file lists third-party software that PrivatePixel ships to the browser
+under a licence with notice or source-availability requirements beyond a
+permissive copyright line.
+
+
+HEIC/HEIF decoding
+------------------
+
+PrivatePixel decodes HEIC/HEIF images with heic-to, which bundles a
+WebAssembly build of libheif and libde265. All three are licensed under the
+GNU Lesser General Public License, version 3 or later (LGPL-3.0-or-later).
+
+  heic-to 1.6.7
+    Copyright (c) Hopper Gee
+    Licence: LGPL-3.0-or-later
+    Source:  https://github.com/hoppergee/heic-to
+             (the npm package https://www.npmjs.com/package/heic-to/v/1.6.7
+             also contains its source in src/)
+
+  libheif 1.23.7 (compiled to WebAssembly inside heic-to)
+    Copyright (c) struktur AG, Dirk Farin, and the libheif contributors
+    Licence: LGPL-3.0-or-later
+    Source:  https://github.com/strukturag/libheif/tree/v1.23.7
+
+  libde265 (HEVC decoder compiled into the libheif WebAssembly build)
+    Copyright (c) struktur AG, Dirk Farin, and the libde265 contributors
+    Licence: LGPL-3.0-or-later
+    Source:  https://github.com/strukturag/libde265
+
+How it is shipped:
+
+  - heic-to is used unmodified. It is loaded only when a HEIC/HEIF file is
+    imported and the browser cannot decode it natively.
+  - The build keeps it in its own JavaScript file (assets/heic-to-<hash>.js in
+    the deployed site), separate from PrivatePixel's code, so it can be
+    replaced with a compatible or modified build of heic-to.
+  - To rebuild PrivatePixel with a different heic-to, change the "heic-to"
+    version in package.json (or point it at your own build), then run
+    `pnpm install` and `pnpm run build`. PrivatePixel's source is at
+    https://github.com/tengfone/privatepixel.
+
+Licence texts (shipped alongside this file):
+
+  licenses/LGPL-3.0.txt  GNU Lesser General Public License, version 3
+  licenses/GPL-3.0.txt   GNU General Public License, version 3 (the LGPL
+                         is a set of additional permissions on top of it)
+
+These libraries are distributed WITHOUT ANY WARRANTY; without even the
+implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
+the GNU Lesser General Public License for details.

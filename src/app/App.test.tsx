@@ -78,6 +78,10 @@ describe("App", () => {
       "accept",
       expect.stringContaining(".heic"),
     );
+    expect(screen.getByRole("link", { name: "Third-party notices" })).toHaveAttribute(
+      "href",
+      "/THIRD_PARTY_NOTICES.txt",
+    );
   });
 
   it("enables Remove BG controls without starting live preview inference", async () => {

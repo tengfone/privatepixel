@@ -1542,6 +1542,13 @@ export function App() {
             <a href="https://tengfone.dev" target="_blank" rel="noreferrer">
               Made with love - tengfone.dev
             </a>
+            <a
+              href={`${import.meta.env.BASE_URL}THIRD_PARTY_NOTICES.txt`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Third-party notices
+            </a>
           </div>
         </div>
       </section>
