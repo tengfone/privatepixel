@@ -44,7 +44,7 @@
     "jsdom": "^27.2.0",
     "prettier": "^3.7.4",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.48.1",
+    "typescript-eslint": "^8.72.2",
     "vite": "^7.2.7",
     "vitest": "^4.0.15"
   },
@@ -52,7 +52,8 @@
     "overrides": {
       "onnxruntime-web>protobufjs": "^7.6.6",
       "onnxruntime-node>adm-zip": "^0.6.1",
-      "@huggingface/transformers>sharp": "^0.35.5"
+      "@huggingface/transformers>sharp": "^0.35.5",
+      "minimatch@>=7.0.0 <11.0.1": "^11.0.1"
     }
   },
   "license": "MIT"
