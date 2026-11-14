@@ -10,7 +10,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { BeforeAfterSlider } from "./BeforeAfterSlider";
+import {
+  BeforeAfterSlider,
+  BeforeAfterSliderHandle,
+  CompareLabels,
+} from "./BeforeAfterSlider";
 import {
   createImageAsset,
   formatBytes,
@@ -1654,6 +1658,7 @@ function PreviewStage({
   const [pan, setPan] = useState<Point>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const sourceImageRef = useRef<HTMLImageElement | null>(null);
+  const compareRef = useRef<BeforeAfterSliderHandle | null>(null);
   const dragStartRef = useRef<{
     pointerId: number;
     origin: Point;
@@ -1729,8 +1734,16 @@ function PreviewStage({
     }
     dragStartRef.current = null;
     setIsPanning(false);
-    if (isSource && dragDistance <= 4) {
+    if (!isSource || dragDistance > 4) {
+      return;
+    }
+
+    // A tap (not a pan) picks an object in Object Select; otherwise it moves
+    // the before/after divider to where the stage was tapped.
+    if (isObjectSelectActive) {
       maybeSelectObject(event);
+    } else {
+      compareRef.current?.moveToClientX(event.clientX);
     }
   }
 
@@ -1760,9 +1773,7 @@ function PreviewStage({
 
   return (
     <div
-      className={`editor-stage preview-stage ${
-        result ? "preview-stage-compare" : "preview-stage-single"
-      } swiss-grid-pattern`}
+      className="editor-stage preview-stage swiss-grid-pattern"
       onWheel={(event) => {
         event.preventDefault();
         changeViewZoom(viewZoom + (event.deltaY > 0 ? -0.1 : 0.1));
@@ -1808,6 +1819,7 @@ function PreviewStage({
               beforeAlt={`Selected ${asset.name}`}
               afterAlt={`Processed ${asset.name}`}
               beforeImageRef={sourceImageRef}
+              handleRef={compareRef}
             >
               {objectOverlay}
             </BeforeAfterSlider>
@@ -1823,6 +1835,7 @@ function PreviewStage({
           )}
         </div>
       </figure>
+      {result ? <CompareLabels /> : null}
       <StageMeta asset={asset} result={result} />
     </div>
   );

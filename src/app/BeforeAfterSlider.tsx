@@ -4,12 +4,23 @@ import {
   PointerEvent,
   ReactNode,
   Ref,
+  SyntheticEvent,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
 } from "react";
+import {
+  Size,
+  clampPosition,
+  containedBox,
+  nextKeyboardPosition,
+} from "./compareGeometry";
 
-const COMPARE_STEP = 5;
+export interface BeforeAfterSliderHandle {
+  /** Moves the divider to a viewport x coordinate and focuses the handle. */
+  moveToClientX: (clientX: number) => void;
+}
 
 interface BeforeAfterSliderProps {
   beforeSrc: string;
@@ -17,15 +28,8 @@ interface BeforeAfterSliderProps {
   beforeAlt: string;
   afterAlt: string;
   beforeImageRef?: Ref<HTMLImageElement>;
+  handleRef?: Ref<BeforeAfterSliderHandle>;
   children?: ReactNode;
-}
-
-function clampPosition(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 50;
-  }
-
-  return Math.min(100, Math.max(0, value));
 }
 
 function prefersReducedMotion(): boolean {
@@ -54,19 +58,35 @@ function releasePointer(target: HTMLElement, pointerId: number): void {
   }
 }
 
+function naturalSize(event: SyntheticEvent<HTMLImageElement>): Size | null {
+  const { naturalWidth, naturalHeight } = event.currentTarget;
+  return naturalWidth > 0 && naturalHeight > 0
+    ? { width: naturalWidth, height: naturalHeight }
+    : null;
+}
+
+/**
+ * Original on the left of the divider, processed result on the right. Both
+ * layers are clipped to their own side and sit on a checkerboard so
+ * transparent pixels in a cut-out never reveal the other image.
+ */
 export function BeforeAfterSlider({
   beforeSrc,
   afterSrc,
   beforeAlt,
   afterAlt,
   beforeImageRef,
+  handleRef,
   children,
 }: BeforeAfterSliderProps) {
   const frameRef = useRef<HTMLDivElement | null>(null);
+  const sliderRef = useRef<HTMLDivElement | null>(null);
   const draggingRef = useRef(false);
   const [position, setPosition] = useState(50);
   const [dragging, setDragging] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion);
+  const [beforeSize, setBeforeSize] = useState<Size | null>(null);
+  const [afterSize, setAfterSize] = useState<Size | null>(null);
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") {
@@ -79,11 +99,18 @@ export function BeforeAfterSlider({
     return () => media.removeEventListener("change", onChange);
   }, []);
 
+  useImperativeHandle(handleRef, () => ({
+    moveToClientX(clientX: number) {
+      sliderRef.current?.focus({ preventScroll: true });
+      moveTo(clientX);
+    },
+  }));
+
   const transition =
     reducedMotion || dragging ? "none" : "left 120ms linear, clip-path 120ms linear";
-  const frameStyle = {
-    "--compare-position": `${position}%`,
-  } as CSSProperties;
+  const rounded = Math.round(position);
+  const beforeClip = `inset(0 ${100 - position}% 0 0)`;
+  const afterClip = `inset(0 0 0 ${position}%)`;
 
   function moveTo(clientX: number): void {
     const frame = frameRef.current;
@@ -133,13 +160,13 @@ export function BeforeAfterSlider({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+    const next = nextKeyboardPosition(event.key, position);
+    if (next === null) {
       return;
     }
 
     event.preventDefault();
-    const delta = event.key === "ArrowRight" ? COMPARE_STEP : -COMPARE_STEP;
-    setPosition((current) => clampPosition(Math.round(current) + delta));
+    setPosition(next);
   }
 
   return (
@@ -147,24 +174,41 @@ export function BeforeAfterSlider({
       ref={frameRef}
       className="preview-image-stack compare-frame"
       data-testid="compare-frame"
-      style={frameStyle}
+      style={{ "--compare-position": `${position}%` } as CSSProperties}
     >
-      <img ref={beforeImageRef} src={beforeSrc} alt={beforeAlt} />
-      <div className="compare-after" data-testid="compare-after" style={{ transition }}>
-        <img src={afterSrc} alt={afterAlt} />
+      <img
+        ref={beforeImageRef}
+        className="compare-before checkerboard"
+        data-testid="compare-before"
+        src={beforeSrc}
+        alt={beforeAlt}
+        style={{ clipPath: beforeClip, transition }}
+        onLoad={(event) => setBeforeSize(naturalSize(event))}
+      />
+      <div
+        className="compare-after"
+        data-testid="compare-after"
+        style={{ clipPath: afterClip, transition }}
+      >
+        <img
+          className="checkerboard"
+          src={afterSrc}
+          alt={afterAlt}
+          style={containedBox(beforeSize, afterSize)}
+          onLoad={(event) => setAfterSize(naturalSize(event))}
+        />
       </div>
       {children}
-      <span className="compare-label compare-label-before">Before</span>
-      <span className="compare-label compare-label-after">After</span>
       <div
+        ref={sliderRef}
         role="slider"
         tabIndex={0}
         aria-label="Before and after"
         aria-orientation="horizontal"
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={Math.round(position)}
-        aria-valuetext={`${Math.round(position)} percent processed`}
+        aria-valuenow={rounded}
+        aria-valuetext={`${rounded}% original on the left, ${100 - rounded}% processed on the right`}
         className="compare-handle"
         style={{ transition }}
         onPointerDown={onPointerDown}
@@ -174,5 +218,22 @@ export function BeforeAfterSlider({
         onKeyDown={onKeyDown}
       />
     </div>
+  );
+}
+
+/**
+ * Side labels live on the stage, outside the zoomed canvas, so they stay
+ * readable at every zoom level and never sit under the zoom toolbar.
+ */
+export function CompareLabels() {
+  return (
+    <>
+      <span className="compare-label compare-label-before" data-testid="label-before">
+        Before
+      </span>
+      <span className="compare-label compare-label-after" data-testid="label-after">
+        After
+      </span>
+    </>
   );
 }
