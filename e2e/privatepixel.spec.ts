@@ -93,3 +93,89 @@ test("imports an image and produces a resize result", async ({ page }) => {
   await page.getByRole("button", { name: "Run Metadata" }).click();
   await expect(page.getByText(/Ready to download/)).toBeVisible();
 });
+
+test("decodes a HEIC photo locally and compares original and result", async ({
+  page,
+}) => {
+  await page.goto("/privatepixel/");
+  await page
+    .getByTestId("file-input")
+    .setInputFiles(new URL("./fixtures/sample.heic", import.meta.url).pathname);
+
+  await expect(page.getByTestId("asset-item")).toHaveCount(1);
+  await expect(page.getByTestId("asset-item")).toContainText("sample.heic");
+  await expect(page.getByTestId("asset-item")).toContainText("64 x 48");
+  await expect(page.getByTestId("heic-note")).toContainText(
+    "EXIF/GPS metadata, colour profile, and HDR are not carried over",
+  );
+
+  await page.getByRole("button", { name: /Compress/ }).click();
+  await page.getByRole("button", { name: "Run Compress" }).click();
+  await expect(page.getByTestId("result-row")).toBeVisible();
+
+  const slider = page.getByRole("slider", { name: "Before and after" });
+  await expect(slider).toBeVisible();
+  await expect(slider).toHaveAttribute("aria-valuenow", "50");
+
+  // Labels: Before on the left, After on the right, neither under the toolbar.
+  const beforeLabel = await page.getByTestId("label-before").boundingBox();
+  const afterLabel = await page.getByTestId("label-after").boundingBox();
+  const toolbar = await page.locator(".preview-zoom-tools").boundingBox();
+  expect(beforeLabel && afterLabel && toolbar).toBeTruthy();
+  expect(beforeLabel!.x + beforeLabel!.width).toBeLessThan(afterLabel!.x);
+  for (const label of [beforeLabel!, afterLabel!]) {
+    const overlaps =
+      label.x < toolbar!.x + toolbar!.width &&
+      label.x + label.width > toolbar!.x &&
+      label.y < toolbar!.y + toolbar!.height &&
+      label.y + label.height > toolbar!.y;
+    expect(overlaps).toBe(false);
+  }
+
+  const clips = () =>
+    page.evaluate(() => ({
+      before: getComputedStyle(document.querySelector("[data-testid=compare-before]")!)
+        .clipPath,
+      after: getComputedStyle(document.querySelector("[data-testid=compare-after]")!)
+        .clipPath,
+    }));
+  const insets = (clip: string) =>
+    (clip.match(/-?[\d.]+/g) ?? []).map((value) => Number(value));
+
+  // The original keeps the part left of the divider, the result the part right of it.
+  await slider.focus();
+  await page.keyboard.press("Home");
+  await expect(slider).toHaveAttribute("aria-valuenow", "0");
+  // [right inset of the original, left inset of the result]; polled because
+  // the divider animates.
+  const sides = async () => {
+    const current = await clips();
+    return [insets(current.before)[1], insets(current.after)[3]];
+  };
+  await expect.poll(sides).toEqual([100, 0]);
+
+  await page.keyboard.press("PageUp");
+  await expect(slider).toHaveAttribute("aria-valuenow", "10");
+  await page.keyboard.press("End");
+  await expect(slider).toHaveAttribute("aria-valuenow", "100");
+  await expect.poll(sides).toEqual([0, 100]);
+
+  // A tap on the stage moves the divider there.
+  const frame = await page.getByTestId("compare-frame").boundingBox();
+  expect(frame).not.toBeNull();
+  await page.mouse.click(frame!.x + frame!.width * 0.25, frame!.y + frame!.height / 2);
+  const tapped = Number(await slider.getAttribute("aria-valuenow"));
+  expect(tapped).toBeGreaterThanOrEqual(22);
+  expect(tapped).toBeLessThanOrEqual(28);
+
+  // Both sides sit on a checkerboard so transparent pixels stay visible.
+  const backgrounds = await page.evaluate(() =>
+    [
+      document.querySelector("[data-testid=compare-before]")!,
+      document.querySelector("[data-testid=compare-after] img")!,
+    ].map((element) => getComputedStyle(element).backgroundImage),
+  );
+  for (const background of backgrounds) {
+    expect(background).toContain("conic-gradient");
+  }
+});
