@@ -1480,8 +1480,8 @@ export function App() {
           <p className="eyebrow">07. Local-first</p>
           <h2 id="local-first-title">Don't take our word for it. Verify it.</h2>
           <p>
-            PrivatePixel opens images in your browser, runs the work on this device,
-            and exports files only when you choose. No account. No server-side image
+            PrivatePixel opens images in your browser, runs the work on this device, and
+            exports files only when you choose. No account. No server-side image
             processing. No hidden upload step.
           </p>
         </div>

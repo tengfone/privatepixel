@@ -1,0 +1,10 @@
+# Generated or vendored files that are not hand-written source.
+dist
+coverage
+playwright-report
+test-results
+pnpm-lock.yaml
+public/models
+public/vendor
+src/wasm/generated
+wasm/privatepixel-core/target

@@ -21,8 +21,7 @@ export interface MetadataFormatSupport {
 }
 
 export type MetadataEditableTarget =
-  | { type: "field"; field: keyof MetadataTextFields }
-  | { type: "custom"; key: string };
+  { type: "field"; field: keyof MetadataTextFields } | { type: "custom"; key: string };
 
 export interface MetadataInspectionEntry {
   id: string;

@@ -8,11 +8,7 @@ export type ImageTool =
   | "remove-background";
 
 export type OutputMimeType =
-  | "image/png"
-  | "image/jpeg"
-  | "image/webp"
-  | "image/avif"
-  | "image/svg+xml";
+  "image/png" | "image/jpeg" | "image/webp" | "image/avif" | "image/svg+xml";
 
 export type ResizeFitMode = "contain" | "cover" | "stretch";
 
@@ -170,8 +166,7 @@ export interface ImageJobFailure {
 export type ImageJobResult = ImageJobSuccess | ImageJobFailure;
 
 export type ImageWorkerInbound =
-  | { type: "process"; request: ImageJobRequest }
-  | { type: "cancel"; jobId: string };
+  { type: "process"; request: ImageJobRequest } | { type: "cancel"; jobId: string };
 
 export type ImageWorkerOutbound = ImageJobProgress | ImageJobResult;
 
