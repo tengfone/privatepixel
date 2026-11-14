@@ -224,10 +224,21 @@ Remove BG works on one image at a time to avoid duplicate large model loads and
 browser memory spikes. The app does not call a remote image-processing or
 inference API as a fallback.
 
-## Third-Party Notices
+## License
 
-HEIC decoding uses heic-to, libheif, and libde265, which are licensed under the
-LGPL-3.0. See [public/THIRD_PARTY_NOTICES.txt](public/THIRD_PARTY_NOTICES.txt),
+PrivatePixel's own code is released under the [MIT License](LICENSE).
+
+Bundled third-party files keep their own licences and are not covered by MIT:
+
+- **RMBG-1.4** (background removal) is free for non-commercial use only.
+  PrivatePixel is a free, non-commercial project; anyone forking it for
+  commercial use must remove the model or get a licence from BRIA AI.
+- **MODNet** and the **MediaPipe** models are Apache-2.0.
+- **heic-to**, **libheif** and **libde265** (HEIC decoding) are LGPL-3.0-or-later.
+- ONNX Runtime Web, MediaPipe Tasks, Transformers.js and the other libraries are
+  MIT or Apache-2.0.
+
+Full details are in [public/THIRD_PARTY_NOTICES.txt](public/THIRD_PARTY_NOTICES.txt),
 which is also served with the app and linked from its About section.
 
 ## Stack

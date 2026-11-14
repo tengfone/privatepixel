@@ -1,9 +1,53 @@
 PrivatePixel - third-party notices
 ==================================
 
-This file lists third-party software that PrivatePixel ships to the browser
-under a licence with notice or source-availability requirements beyond a
-permissive copyright line.
+PrivatePixel's own code is MIT licensed (see LICENSE in the repository).
+This file lists the third-party software and AI models PrivatePixel ships to
+the browser, and their licences. They are NOT covered by PrivatePixel's MIT
+licence.
+
+
+AI models (served from models/)
+-------------------------------
+
+  RMBG-1.4 (background removal, general objects)
+    Copyright (c) BRIA AI
+    Source:  https://huggingface.co/briaai/RMBG-1.4
+    Licence: bria-rmbg-1.4 - free for NON-COMMERCIAL use only. Commercial
+             use requires a separate agreement with BRIA AI. See
+             https://bria.ai/bria-huggingface-model-license-agreement/
+    PrivatePixel is a free, non-commercial, open-source project. If you fork
+    or deploy it commercially, remove this model or obtain a licence from
+    BRIA AI.
+
+  MODNet (background removal, portraits; ONNX export by Xenova)
+    Copyright (c) Zhanghan Ke and the MODNet authors
+    Source:  https://github.com/ZHKKKe/MODNet
+             https://huggingface.co/Xenova/modnet
+    Licence: Apache-2.0
+
+  MediaPipe BlazeFace short-range face detector
+  MediaPipe interactive segmenter (MagicTouch)
+    Copyright (c) Google LLC
+    Source:  https://ai.google.dev/edge/mediapipe/solutions/vision/face_detector
+             https://ai.google.dev/edge/mediapipe/solutions/vision/interactive_segmenter
+    Licence: Apache-2.0
+
+
+Runtimes and libraries (bundled or served from vendor/)
+-------------------------------------------------------
+
+  ONNX Runtime Web       Copyright (c) Microsoft Corporation      MIT
+  MediaPipe Tasks Vision Copyright (c) Google LLC                 Apache-2.0
+  Transformers.js        Copyright (c) Hugging Face               Apache-2.0
+  React, React DOM       Copyright (c) Meta Platforms, Inc.       MIT
+  react-easy-crop        Copyright (c) Valentin Hervieu           MIT
+  pica                   Copyright (c) Vitaly Puzrin              MIT
+
+  The Apache License 2.0 text is at https://www.apache.org/licenses/LICENSE-2.0
+  and is shipped as licenses/Apache-2.0.txt. Remaining transitive packages are
+  MIT, ISC, BSD-3-Clause, 0BSD or Apache-2.0 licensed; their notices are
+  included in their packages under node_modules.
 
 
 HEIC/HEIF decoding
