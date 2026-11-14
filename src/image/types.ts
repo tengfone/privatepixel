@@ -14,15 +14,28 @@ export type ResizeFitMode = "contain" | "cover" | "stretch";
 
 export type RemoveBackgroundMode = "auto" | "portrait" | "general" | "best";
 
-export interface ImageAsset {
-  id: string;
-  file: File;
+/** The file the user picked, when the app works from a decoded copy of it. */
+export interface ImportedOriginal {
   name: string;
   mimeType: string;
+  size: number;
+}
+
+export interface ImageAsset {
+  id: string;
+  /** The bytes every tool reads (a lossless PNG working copy for HEIC). */
+  file: File;
+  /** Name of the picked file; output names are built from its stem. */
+  name: string;
+  /** Type of `file`, which is what the tools decode. */
+  mimeType: string;
+  /** Size of the picked file, so size changes compare against what the user has. */
   size: number;
   width: number;
   height: number;
   previewUrl: string;
+  /** Set for HEIC/HEIF imports, which are decoded to a PNG working copy. */
+  original?: ImportedOriginal;
 }
 
 export interface ImageJobSource {

@@ -1,5 +1,5 @@
 import { isSupportedInputMime, sanitizeBaseName } from "./options";
-import type { ImageAsset } from "./types";
+import type { ImageAsset, ImportedOriginal } from "./types";
 
 export class UnsupportedImageTypeError extends Error {
   constructor(mimeType: string) {
@@ -8,7 +8,10 @@ export class UnsupportedImageTypeError extends Error {
   }
 }
 
-export async function createImageAsset(file: File): Promise<ImageAsset> {
+export async function createImageAsset(
+  file: File,
+  original?: ImportedOriginal,
+): Promise<ImageAsset> {
   if (!isSupportedInputMime(file.type)) {
     throw new UnsupportedImageTypeError(file.type);
   }
@@ -19,12 +22,16 @@ export async function createImageAsset(file: File): Promise<ImageAsset> {
   const asset: ImageAsset = {
     id: crypto.randomUUID(),
     file,
-    name: file.name || `${sanitizeBaseName(file.type)}.${file.type.split("/")[1]}`,
+    name:
+      original?.name ||
+      file.name ||
+      `${sanitizeBaseName(file.type)}.${file.type.split("/")[1]}`,
     mimeType: file.type,
-    size: file.size,
+    size: original?.size ?? file.size,
     width: dimensions.width,
     height: dimensions.height,
     previewUrl,
+    ...(original ? { original } : {}),
   };
 
   return asset;

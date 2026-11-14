@@ -1514,6 +1514,11 @@ progress::-moz-progress-bar {
   color: var(--color-bg);
 }
 
+.asset-copy .asset-note {
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
 .error-text {
   margin: 0;
   color: var(--color-accent);

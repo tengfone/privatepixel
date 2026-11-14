@@ -50,6 +50,11 @@ export function getMimeLabel(mimeType: OutputMimeType): string {
 }
 
 export function getDefaultOutputMime(asset?: ImageAsset): OutputMimeType {
+  // HEIC photos arrive as a PNG working copy; a photo is best saved as JPEG.
+  if (asset?.original) {
+    return "image/jpeg";
+  }
+
   return asset && OUTPUT_MIME_TYPES.includes(asset.mimeType as OutputMimeType)
     ? (asset.mimeType as OutputMimeType)
     : "image/png";

@@ -1,9 +1,26 @@
 import { isSupportedInputMime } from "./options";
+import type { ImportedOriginal } from "./types";
 
-export const HEIC_DECODE_MESSAGE = "HEIC/HEIF could not be decoded in this browser.";
+export const HEIC_DECODE_HINT =
+  "couldn't be decoded. The file may be damaged or use an unsupported HEIC variant.";
+
+export const HEIC_DECODER_LOAD_MESSAGE =
+  "The HEIC decoder couldn't be loaded. Check your connection and try again.";
+
+/** What a HEIC/HEIF import leaves behind; shown when such a file is imported. */
+export const HEIC_IMPORT_NOTE =
+  "HEIC is decoded to a lossless working copy. Its EXIF/GPS metadata, colour profile, and HDR are not carried over.";
 
 export const UNSUPPORTED_IMPORT_MESSAGE =
   "Add PNG, JPEG, WebP, GIF, BMP, AVIF, or HEIC images.";
+
+const HEIC_MIME_TYPES = new Set([
+  "image/heic",
+  "image/heif",
+  "image/heic-sequence",
+  "image/heif-sequence",
+]);
+const UNKNOWN_MIME_TYPES = new Set(["", "application/octet-stream"]);
 
 export const IMAGE_FILE_ACCEPT = [
   "image/png",
@@ -13,21 +30,40 @@ export const IMAGE_FILE_ACCEPT = [
   "image/bmp",
   "image/avif",
   "image/svg+xml",
-  "image/heic",
-  "image/heif",
+  ...HEIC_MIME_TYPES,
   ".heic",
   ".heif",
 ].join(",");
 
-const HEIC_MIME_TYPES = new Set(["image/heic", "image/heif"]);
-const UNKNOWN_MIME_TYPES = new Set(["", "application/octet-stream"]);
-const JPEG_QUALITY = 0.92;
-
 export class HeicDecodeError extends Error {
-  constructor(message = HEIC_DECODE_MESSAGE) {
-    super(message);
+  readonly fileName: string;
+
+  constructor(fileName: string) {
+    super(`${fileName || "This HEIC file"} ${HEIC_DECODE_HINT}`);
     this.name = "HeicDecodeError";
+    this.fileName = fileName;
   }
+}
+
+export class HeicDecoderLoadError extends Error {
+  constructor() {
+    super(HEIC_DECODER_LOAD_MESSAGE);
+    this.name = "HeicDecoderLoadError";
+  }
+}
+
+export interface PreparedImport {
+  /** A file every tool can read: the original, or a lossless PNG of a HEIC. */
+  file: File;
+  /** The file the user picked, when `file` is a decoded working copy. */
+  original?: ImportedOriginal;
+}
+
+export interface HeicDecodeProgress {
+  /** 1-based position of the HEIC file being decoded. */
+  index: number;
+  total: number;
+  fileName: string;
 }
 
 export function isHeicFile(file: { name: string; type: string }): boolean {
@@ -47,72 +83,181 @@ export function isAcceptedImportFile(file: { name: string; type: string }): bool
   return isSupportedInputMime(file.type) || isHeicFile(file);
 }
 
-export async function prepareImportFile(file: File): Promise<File> {
-  if (!isHeicFile(file)) {
-    return file;
+/**
+ * Turns picked files into files the pipeline can read. HEIC/HEIF files are
+ * decoded one at a time: each decode holds a full-resolution RGBA copy in
+ * memory, so decoding a batch of 48 MP photos in parallel can exhaust a tab.
+ * Other files pass straight through.
+ */
+export async function prepareImportFiles(
+  files: File[],
+  onHeicProgress?: (progress: HeicDecodeProgress) => void,
+): Promise<PromiseSettledResult<PreparedImport>[]> {
+  const total = files.filter((file) => isHeicFile(file)).length;
+  const results: PromiseSettledResult<PreparedImport>[] = [];
+  let index = 0;
+
+  for (const file of files) {
+    if (!isHeicFile(file)) {
+      results.push({ status: "fulfilled", value: { file } });
+      continue;
+    }
+
+    index += 1;
+    onHeicProgress?.({ index, total, fileName: file.name });
+    try {
+      results.push({ status: "fulfilled", value: await decodeHeicFile(file) });
+    } catch (error) {
+      results.push({ status: "rejected", reason: error });
+    }
   }
 
-  return decodeHeicFile(file);
+  return results;
 }
 
-export async function decodeHeicFile(file: File): Promise<File> {
-  try {
-    const converted = await decodeHeicBlob(file);
-    const blob = firstDecodedBlob(converted);
-    if (!blob) {
-      throw new HeicDecodeError();
-    }
+let decodeQueue: Promise<unknown> = Promise.resolve();
 
-    return new File([blob], jpegNameForHeic(file.name), {
-      type: "image/jpeg",
+/**
+ * Decodes the primary image of a HEIC/HEIF file to a lossless PNG so later
+ * tools encode from full-quality pixels instead of a second lossy JPEG.
+ * Decodes are serialised across calls, even when imports overlap.
+ */
+export function decodeHeicFile(file: File): Promise<PreparedImport> {
+  const run = decodeQueue.then(() => decodeHeicFileNow(file));
+  decodeQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function decodeHeicFileNow(file: File): Promise<PreparedImport> {
+  const png = (await decodeNatively(file)) ?? (await decodeWithLibheif(file));
+  if (!png || png.size === 0) {
+    throw new HeicDecodeError(file.name);
+  }
+
+  return {
+    file: new File([png], pngNameForHeic(file.name), {
+      type: "image/png",
       lastModified: file.lastModified,
-    });
-  } catch (error) {
-    if (error instanceof HeicDecodeError) {
-      throw error;
-    }
+    }),
+    original: {
+      name: file.name.trim() || "image.heic",
+      mimeType: file.type.trim().toLowerCase() || "image/heic",
+      size: file.size,
+    },
+  };
+}
 
-    throw new HeicDecodeError();
+/**
+ * Browsers with a system HEIC decoder (Safari) can read the file directly,
+ * which avoids downloading the multi-megabyte WASM decoder.
+ */
+async function decodeNatively(file: File): Promise<Blob | null> {
+  if (typeof createImageBitmap !== "function") {
+    return null;
+  }
+
+  let bitmap: ImageBitmap | undefined;
+  try {
+    bitmap = await createImageBitmap(file);
+    return await bitmapToPng(bitmap);
+  } catch {
+    return null;
+  } finally {
+    bitmap?.close();
+  }
+}
+
+async function bitmapToPng(bitmap: ImageBitmap): Promise<Blob | null> {
+  if (!bitmap.width || !bitmap.height) {
+    return null;
+  }
+
+  if (typeof OffscreenCanvas === "function") {
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return null;
+    }
+    context.drawImage(bitmap, 0, 0);
+    return canvas.convertToBlob({ type: "image/png" });
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return null;
+  }
+  context.drawImage(bitmap, 0, 0);
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+}
+
+async function decodeWithLibheif(file: File): Promise<Blob> {
+  // heic-to embeds a multi-megabyte libheif WASM build. Load it only when a
+  // HEIC/HEIF file needs it so the static page does not download it otherwise.
+  let heicTo: (typeof import("heic-to"))["heicTo"];
+  try {
+    ({ heicTo } = await import("heic-to"));
+  } catch {
+    throw new HeicDecoderLoadError();
+  }
+
+  try {
+    // heic-to decodes the primary image only and returns a single Blob.
+    return await heicTo({ blob: file, type: "image/png" });
+  } catch {
+    throw new HeicDecodeError(file.name);
   }
 }
 
 export function describeImportResults(input: {
   imported: number;
+  heicImported?: number;
   failures: unknown[];
 }): string {
-  const heicFailures = input.failures.filter(
+  const { imported, failures } = input;
+  const heicNote = input.heicImported ? ` ${HEIC_IMPORT_NOTE}` : "";
+  const loadFailures = failures.filter(
+    (failure) => failure instanceof HeicDecoderLoadError,
+  );
+  const decodeFailures = failures.filter(
     (failure) => failure instanceof HeicDecodeError,
-  ).length;
-  const otherFailures = input.failures.length - heicFailures;
+  );
 
-  if (input.imported === 0 && heicFailures > 0 && otherFailures === 0) {
-    return HEIC_DECODE_MESSAGE;
+  if (failures.length === 0) {
+    return `Imported ${plural(imported, "image", "images")} locally.${heicNote}`;
   }
 
-  if (input.failures.length === 0) {
-    return `Imported ${plural(input.imported, "image", "images")} locally.`;
+  if (imported === 0 && loadFailures.length === failures.length) {
+    return HEIC_DECODER_LOAD_MESSAGE;
   }
 
-  if (heicFailures > 0 && otherFailures === 0) {
-    return `Imported ${plural(input.imported, "image", "images")}; ${plural(
-      heicFailures,
+  if (imported === 0 && failures.length === 1 && decodeFailures.length === 1) {
+    return (decodeFailures[0] as HeicDecodeError).message;
+  }
+
+  const prefix = `Imported ${plural(imported, "image", "images")};`;
+  if (
+    loadFailures.length &&
+    loadFailures.length + decodeFailures.length === failures.length
+  ) {
+    return `${prefix} ${HEIC_DECODER_LOAD_MESSAGE}${heicNote}`;
+  }
+
+  if (decodeFailures.length === failures.length) {
+    const hint =
+      decodeFailures.length === 1
+        ? HEIC_DECODE_HINT
+        : HEIC_DECODE_HINT.replace("The file may", "The files may");
+    return `${prefix} ${plural(
+      decodeFailures.length,
       "HEIC/HEIF file",
       "HEIC/HEIF files",
-    )} could not be decoded.`;
+    )} ${hint}${heicNote}`;
   }
 
-  return `Imported ${plural(input.imported, "image", "images")}; ${input.failures.length} could not be decoded.`;
-}
-
-async function decodeHeicBlob(file: File): Promise<unknown> {
-  // heic-to embeds a multi-megabyte libheif WASM build. Load it only when a
-  // HEIC/HEIF file is imported so the static page does not download it otherwise.
-  const { heicTo } = await import("heic-to");
-  return heicTo({
-    blob: file,
-    type: "image/jpeg",
-    quality: JPEG_QUALITY,
-  });
+  return `${prefix} ${failures.length} could not be decoded.${heicNote}`;
 }
 
 function hasHeicExtension(name: string): boolean {
@@ -120,23 +265,12 @@ function hasHeicExtension(name: string): boolean {
   return normalized.endsWith(".heic") || normalized.endsWith(".heif");
 }
 
-function jpegNameForHeic(filename: string): string {
-  const stripped = filename.trim().replace(/\.(heic|heif)$/i, "");
-  const stem = stripped.trim();
-  return `${stem || "image"}.jpg`;
-}
-
-function firstDecodedBlob(converted: unknown): Blob | null {
-  if (converted instanceof Blob) {
-    return converted.size > 0 ? converted : null;
-  }
-
-  if (!Array.isArray(converted)) {
-    return null;
-  }
-
-  const blob = converted.find((entry): entry is Blob => entry instanceof Blob);
-  return blob && blob.size > 0 ? blob : null;
+function pngNameForHeic(filename: string): string {
+  const stem = filename
+    .trim()
+    .replace(/\.(heic|heif)$/i, "")
+    .trim();
+  return `${stem || "image"}.png`;
 }
 
 function plural(count: number, singular: string, pluralForm: string): string {

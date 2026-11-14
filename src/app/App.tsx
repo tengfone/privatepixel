@@ -22,12 +22,13 @@ import {
   revokeImageAsset,
 } from "../image/assets";
 import {
+  HEIC_IMPORT_NOTE,
   IMAGE_FILE_ACCEPT,
   UNSUPPORTED_IMPORT_MESSAGE,
   describeImportResults,
   isAcceptedImportFile,
   isHeicFile,
-  prepareImportFile,
+  prepareImportFiles,
 } from "../image/heic";
 import { downloadBlob } from "../image/download";
 import {
@@ -631,8 +632,15 @@ export function App() {
         : "Reading local image metadata.",
     );
 
+    const prepared = await prepareImportFiles(files, ({ index, total }) =>
+      setNotice(`Decoding HEIC ${index} of ${total}…`),
+    );
     const settled = await Promise.allSettled(
-      files.map(async (file) => createImageAsset(await prepareImportFile(file))),
+      prepared.map((entry) =>
+        entry.status === "fulfilled"
+          ? createImageAsset(entry.value.file, entry.value.original)
+          : Promise.reject(entry.reason),
+      ),
     );
     const imported: ImageAsset[] = [];
     const failures: unknown[] = [];
@@ -655,6 +663,7 @@ export function App() {
     setNotice(
       describeImportResults({
         imported: imported.length,
+        heicImported: imported.filter((asset) => asset.original).length,
         failures,
       }),
     );
@@ -827,7 +836,7 @@ export function App() {
             source: {
               name: selectedAsset.name,
               mimeType: selectedAsset.mimeType,
-              size: selectedAsset.size,
+              size: selectedAsset.file.size,
               width: selectedAsset.width,
               height: selectedAsset.height,
               buffer,
@@ -946,7 +955,7 @@ export function App() {
         source: {
           name: selectedAsset.name,
           mimeType: selectedAsset.mimeType,
-          size: selectedAsset.size,
+          size: selectedAsset.file.size,
           width: selectedAsset.width,
           height: selectedAsset.height,
           buffer,
@@ -1031,7 +1040,7 @@ export function App() {
         source: {
           name: asset.name,
           mimeType: asset.mimeType,
-          size: asset.size,
+          size: asset.file.size,
           width: asset.width,
           height: asset.height,
           buffer,
@@ -2569,7 +2578,7 @@ function MetadataControls({ asset, options, onChange }: MetadataControlsProps) {
         const result = inspectMetadataSource({
           name: inspectedAsset.name,
           mimeType: inspectedAsset.mimeType,
-          size: inspectedAsset.size,
+          size: inspectedAsset.file.size,
           width: inspectedAsset.width,
           height: inspectedAsset.height,
           buffer,
@@ -2669,6 +2678,13 @@ function MetadataControls({ asset, options, onChange }: MetadataControlsProps) {
         <p className="eyebrow">{support.label}</p>
         <h3>{canWrite ? "Format-aware metadata" : "Inspect only"}</h3>
         <p>{support.summary}</p>
+        {asset?.original ? (
+          <p>
+            Showing the PNG working copy decoded from {asset.original.name}. The HEIC
+            file&apos;s EXIF/GPS metadata, colour profile, and HDR were not carried
+            over.
+          </p>
+        ) : null}
       </div>
 
       {canWrite ? (
@@ -3018,8 +3034,13 @@ function AssetItem({
       <div className="asset-copy">
         <p>
           {formatDimensions(asset.width, asset.height)} / {formatBytes(asset.size)} /{" "}
-          {asset.mimeType}
+          {asset.original ? asset.original.mimeType : asset.mimeType}
         </p>
+        {asset.original ? (
+          <p className="asset-note" data-testid="heic-note">
+            {HEIC_IMPORT_NOTE}
+          </p>
+        ) : null}
         <div className="status-row">
           <div>
             <span className={`status-dot ${job.status}`} />
